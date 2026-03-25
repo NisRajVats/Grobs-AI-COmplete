@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Resume Analysis is Ready!</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #f8fafc;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px;
+            text-align: center;
+            color: white;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        .content {
+            padding: 40px;
+        }
+        .score-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 16px;
+            text-align: center;
+            margin: 20px 0;
+            position: relative;
+            overflow: hidden;
+        }
+        .score-box::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+        .score {
+            font-size: 64px;
+            font-weight: 800;
+            line-height: 1;
+            text-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .score-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            opacity: 0.8;
+            margin-top: 10px;
+        }
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #2d3748;
+            margin: 30px 0 15px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .recommendations {
+            background: #f7fafc;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .recommendation-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .recommendation-item:last-child {
+            border-bottom: none;
+        }
+        .icon-circle {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .icon-circle.success {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .icon-circle.warning {
+            background: #fef3c7;
+            color: #744210;
+        }
+        .icon-circle.info {
+            background: #bee3f8;
+            color: #2a4365;
+        }
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 32px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 20px 0;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+            text-decoration: none;
+            color: white;
+        }
+        .footer {
+            background: #edf2f7;
+            padding: 20px 40px;
+            text-align: center;
+            color: #718096;
+            font-size: 12px;
+        }
+        .footer a {
+            color: #4a5568;
+            text-decoration: none;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2d3748;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 0.5; }
+        }
+        @media (max-width: 600px) {
+            .content { padding: 20px; }
+            .header { padding: 30px 20px; }
+            .score { font-size: 48px; }
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 Resume Analysis Complete!</h1>
+            <p>Your career journey just got smarter</p>
+        </div>
+        
+        <div class="content">
+            <h2>Hello {{ user_name }}!</h2>
+            
+            <p>Your resume analysis is ready. Here's how you performed:</p>
+            
+            <div class="score-box">
+                <div class="score">{{ score }}%</div>
+                <div class="score-label">Match Score</div>
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">8/10</div>
+                    <div class="stat-label">Keywords Found</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">92%</div>
+                    <div class="stat-label">Format Quality</div>
+                </div>
+            </div>
+            
+            <h3 class="section-title">What's Next?</h3>
+            
+            <div class="recommendations">
+                <div class="recommendation-item">
+                    <div class="icon-circle success">✓</div>
+                    <div>
+                        <strong>Review your personalized recommendations</strong>
+                        <br><span style="color: #4a5568; font-size: 14px;">Optimize your resume for better results</span>
+                    </div>
+                </div>
+                <div class="recommendation-item">
+                    <div class="icon-circle warning">⚠</div>
+                    <div>
+                        <strong>Update your skills section</strong>
+                        <br><span style="color: #4a5568; font-size: 14px;">Add more technical keywords</span>
+                    </div>
+                </div>
+                <div class="recommendation-item">
+                    <div class="icon-circle info">💡</div>
+                    <div>
+                        <strong>Apply to matching jobs</strong>
+                        <br><span style="color: #4a5568; font-size: 14px;">We found 15 perfect matches for you</span>
+                    </div>
+                </div>
+            </div>
+            
+            <p><strong>Resume:</strong> {{ resume_name }}</p>
+            
+            <a href="{{ app_url }}" class="cta-button">View Your Complete Analysis</a>
+            
+            <p style="color: #718096; font-size: 14px; margin-top: 20px;">
+                This analysis was performed using our advanced AI algorithms to help you optimize your resume for better job matches.
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>
+                Best of luck with your job search! 🚀<br>
+                <a href="{{ app_url }}">GROBS.AI</a> - Your AI Career Assistant
+            </p>
+            <p style="margin-top: 10px;">
+                Need help? Contact our support team at <a href="mailto:support@grobs.ai">support@grobs.ai</a>
+            </p>
+        </div>
+    </div>
+</body>
+</html>

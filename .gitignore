@@ -1,0 +1,39 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environments
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Zencoder/Zenflow
+.zencoder/
+.zenflow/
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+*.log
+Backend/grobs.db
+Backend/backend.log
+Backend/uploads/
+Backend/data/
+Backend/chroma_db/
+
+# Node/React
+node_modules/
+Frontend/node_modules/
+dist/
+Frontend/dist/
+build/
+.eslintcache
+
+# VS Code
+.vscode/
+.history/
+*.code-workspace
