@@ -4,89 +4,24 @@ Interview router for mock interviews and practice sessions.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
 
 from app.database.session import get_db
 from app.models import User, Resume, InterviewSession, InterviewQuestion, InterviewAnswer
+from app.schemas.ai import (
+    InterviewSessionCreate,
+    InterviewAnswerSubmit,
+    InterviewQuestionResponse,
+    InterviewSessionResponse,
+    InterviewAnswerResponse,
+    QuestionGenerationRequest
+)
 from app.utils.dependencies import get_current_user
 from app.services.ai_services.interview_ai import generate_interview_questions
 from app.services.llm_service import llm_service
+from datetime import datetime
 import json
 
 router = APIRouter(prefix="/api/interview", tags=["Interview"])
-
-
-# ==================== Schemas ====================
-
-class InterviewSessionCreate(BaseModel):
-    resume_id: Optional[int] = None
-    job_title: Optional[str] = None
-    company: Optional[str] = None
-    job_description: Optional[str] = None
-    question_count: int = 5
-    interview_type: str = "mixed"  # behavioral, technical, mixed
-
-
-class InterviewAnswerSubmit(BaseModel):
-    question_id: int
-    answer_text: Optional[str] = None
-    time_taken_seconds: Optional[int] = None
-
-
-class InterviewQuestionResponse(BaseModel):
-    id: int
-    question_text: str
-    question_type: str
-    category: Optional[str]
-    order_index: int
-    tips: Optional[str]
-    focus_areas: Optional[List[str]]
-    
-    class Config:
-        from_attributes = True
-
-
-class InterviewSessionResponse(BaseModel):
-    id: int
-    user_id: int
-    resume_id: Optional[int]
-    job_title: Optional[str]
-    company: Optional[str]
-    status: str
-    current_question_index: int
-    question_count: int
-    interview_type: str
-    overall_score: Optional[float]
-    feedback_summary: Optional[str]
-    started_at: str
-    completed_at: Optional[str]
-    questions: Optional[List[InterviewQuestionResponse]] = []
-    
-    class Config:
-        from_attributes = True
-
-
-class InterviewAnswerResponse(BaseModel):
-    id: int
-    question_id: int
-    answer_text: Optional[str]
-    score: Optional[float]
-    feedback: Optional[str]
-    strengths: Optional[List[str]]
-    improvements: Optional[List[str]]
-    suggested_improvements: Optional[List[str]]
-    time_taken_seconds: Optional[int]
-    created_at: str
-    
-    class Config:
-        from_attributes = True
-
-
-class QuestionGenerationRequest(BaseModel):
-    resume_id: Optional[int] = None
-    job_description: Optional[str] = ""
-    job_title: Optional[str] = None
 
 
 # ==================== Endpoints ====================
@@ -307,7 +242,7 @@ async def get_session(
     return session
 
 
-@router.get("/sessions/{session_id}/questions")
+@router.get("/sessions/{session_id}/questions", response_model=List[InterviewQuestionResponse])
 async def get_session_questions(
     session_id: int,
     current_user: User = Depends(get_current_user),

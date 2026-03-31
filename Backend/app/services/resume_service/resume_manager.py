@@ -128,18 +128,49 @@ class ResumeManager:
         resume.title = resume_data.get("title", resume.title)
         resume.target_role = resume_data.get("target_role", resume.target_role)
         resume.template_name = resume_data.get("template_name", resume.template_name)
-        resume.updated_at = datetime.now().isoformat()
+        resume.updated_at = datetime.now()
 
-        # Update summary in parsed_data if provided
-        if "summary" in resume_data:
+        # Update parsed_data - merge existing, provided, and root fields
+        pd = {}
+        if resume.parsed_data:
             try:
-                pd = json.loads(resume.parsed_data) if resume.parsed_data else {}
-                pd["summary"] = resume_data["summary"]
-                resume.parsed_data = json.dumps(pd)
+                pd = json.loads(resume.parsed_data)
+                if not isinstance(pd, dict):
+                    pd = {}
             except:
-                pass
+                pd = {}
+
+        # 1. Merge with provided parsed_data
+        if "parsed_data" in resume_data and resume_data["parsed_data"]:
+            new_pd = resume_data["parsed_data"]
+            if isinstance(new_pd, str):
+                try:
+                    new_pd = json.loads(new_pd)
+                except:
+                    new_pd = {}
+            if isinstance(new_pd, dict):
+                pd.update(new_pd)
+
+        # 2. Sync root-level fields into parsed_data
+        if "full_name" in resume_data:
+            pd["full_name"] = resume_data["full_name"]
+        if "email" in resume_data:
+            pd["email"] = resume_data["email"]
+        if "phone" in resume_data:
+            pd["phone"] = resume_data["phone"]
+        if "linkedin_url" in resume_data:
+            pd["linkedin_url"] = resume_data["linkedin_url"]
+        if "summary" in resume_data:
+            pd["summary"] = resume_data["summary"]
         
-        # Update nested data
+        # 3. Sync nested fields into parsed_data to keep everything in sync
+        for field in ["education", "experience", "projects", "skills"]:
+            if field in resume_data and resume_data[field] is not None:
+                pd[field] = resume_data[field]
+
+        resume.parsed_data = json.dumps(pd)
+        
+        # Update nested data in structured tables
         self._update_nested_data(resume, resume_data)
         
         # Create new version
@@ -193,7 +224,7 @@ class ResumeManager:
             resume.email = encrypt(parsed_data.get("email", ""))
             resume.phone = encrypt(parsed_data.get("phone", ""))
             resume.linkedin_url = encrypt(parsed_data.get("linkedin_url", ""))
-            resume.updated_at = datetime.now().isoformat()
+            resume.updated_at = datetime.now()
             
             # Populate nested tables (Education, Experience, etc.)
             self._update_nested_data(resume, parsed_data)
@@ -216,7 +247,9 @@ class ResumeManager:
         if not resume:
             return None
         
-        ats_result = calculate_ats_score(resume, job_description)
+        # ATS analysis is now independent of job_description as per user request
+        # We focus on general professional standards and target role
+        ats_result = calculate_ats_score(resume)
         
         # Save analysis
         analysis = ResumeAnalysis(
@@ -224,7 +257,7 @@ class ResumeManager:
             analysis_type="ats",
             score=ats_result["overall_score"],
             feedback=json.dumps(ats_result),
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now()
         )
         self.db.add(analysis)
         
@@ -288,10 +321,19 @@ class ResumeManager:
         
         # Skills
         for skill_data in data.get("skills", []):
+            skill_name = ""
+            skill_category = "Technical"
+            
+            if isinstance(skill_data, dict):
+                skill_name = skill_data.get("name", "")
+                skill_category = skill_data.get("category", "Technical")
+            else:
+                skill_name = str(skill_data)
+                
             skill = Skill(
                 resume_id=resume.id,
-                name=skill_data.get("name", ""),
-                category=skill_data.get("category", "Technical")
+                name=skill_name,
+                category=skill_category
             )
             self.db.add(skill)
         
@@ -318,7 +360,7 @@ class ResumeManager:
             version_number=version_number,
             parsed_data=resume.parsed_data,
             ats_score=resume.ats_score,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now()
         )
         self.db.add(version)
         self.db.commit()

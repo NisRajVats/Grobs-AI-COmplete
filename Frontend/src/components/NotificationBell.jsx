@@ -73,13 +73,14 @@ const NotificationBell = () => {
       const data = response.data || [];
       setNotifications(data);
       setUnreadCount(data.filter(n => !n.is_read).length);
-    } catch (err) {
+    } catch {
       setNotifications([]);
       setUnreadCount(0);
     }
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchNotifications();
     const interval = setInterval(fetchNotifications, 30000);
     return () => clearInterval(interval);

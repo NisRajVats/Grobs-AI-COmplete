@@ -25,6 +25,7 @@ from app.schemas.auth import (
     UserCreate,
     UserResponse,
     TokenResponse,
+    TokenRefreshRequest,
     PasswordResetRequest,
     PasswordResetConfirm,
     PasswordChange,
@@ -92,7 +93,7 @@ async def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
-    refresh_token: str,
+    request: TokenRefreshRequest,
     db: Session = Depends(get_db)
 ):
     """
@@ -104,7 +105,7 @@ async def refresh_token(
     auth_service = AuthService(db)
     
     try:
-        result = auth_service.refresh_tokens(refresh_token)
+        result = auth_service.refresh_tokens(request.refresh_token)
         
         return TokenResponse(
             access_token=result["tokens"].access_token,

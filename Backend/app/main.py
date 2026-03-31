@@ -119,7 +119,7 @@ app = FastAPI(
 register_exception_handlers(app)
 
 
-# ==================== Middleware ====================
+# ==================== Custom Middleware ====================
 
 # Rate limit exception handler
 @app.exception_handler(429)
@@ -141,7 +141,7 @@ async def log_requests_and_rate_limit(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
     
     # Apply rate limiting
-    if not rate_limiter.is_allowed(client_ip):
+    if settings.ENVIRONMENT != "testing" and not rate_limiter.is_allowed(client_ip):
         logger.warning(f"Rate limit exceeded for IP: {client_ip}")
         return JSONResponse(
             status_code=429,
@@ -163,16 +163,27 @@ async def log_requests_and_rate_limit(request: Request, call_next):
     )
     
     # Add processing time header
-    response.headers["X-Process-Time"] = str(process_time)
+    if hasattr(response, "headers"):
+        response.headers["X-Process-Time"] = str(process_time)
     
     return response
 
 
+# ==================== CORS Middleware (Outermost) ====================
+
 # CORS middleware - Allow specific origins for development
 # When allow_credentials=True, allow_origins cannot be ["*"]
+origins = settings.CORS_ORIGINS
+if isinstance(origins, str):
+    try:
+        import json
+        origins = json.loads(origins)
+    except:
+        origins = [o.strip() for o in origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -12,7 +12,9 @@ class TestJobsEndpoints:
     def test_list_jobs_authenticated(self, client, auth_headers):
         res = client.get("/api/jobs", headers=auth_headers)
         assert res.status_code == 200
-        assert isinstance(res.json(), list)
+        data = res.json()
+        assert "jobs" in data
+        assert isinstance(data["jobs"], list)
 
     def test_search_jobs(self, client, auth_headers):
         res = client.get("/api/jobs/search?q=software+engineer", headers=auth_headers)

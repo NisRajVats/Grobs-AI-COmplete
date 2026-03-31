@@ -5,6 +5,7 @@ Pydantic models for job endpoints.
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime
 
 
 # ==================== Job Skill Schemas ====================
@@ -63,16 +64,17 @@ class JobResponse(BaseModel):
     id: int
     job_title: str
     company_name: str
-    location: Optional[str]
-    job_type: Optional[str]
-    job_description: Optional[str]
-    experience_required: Optional[str]
-    salary_range: Optional[str]
-    job_link: Optional[str]
-    posted_date: Optional[str]
-    source: Optional[str]
-    created_at: str
-    updated_at: str
+    location: Optional[str] = None
+    job_type: Optional[str] = None
+    job_description: Optional[str] = None
+    skills_required: Optional[str] = None
+    experience_required: Optional[str] = None
+    salary_range: Optional[str] = None
+    job_link: Optional[str] = None
+    posted_date: Optional[str] = None
+    source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -102,8 +104,20 @@ class JobSearchResponse(BaseModel):
     """Response schema for job search."""
     jobs: List[JobResponse]
     total: int
-    page: int
-    page_size: int
+    page: Optional[int] = None
+    page_size: Optional[int] = None
+
+
+# ==================== Job Matching Schemas ====================
+
+class JobMatchResponse(BaseModel):
+    """Response schema for job matching."""
+    job: JobResponse
+    match_score: float
+    missing_keywords: List[str] = []
+
+    class Config:
+        from_attributes = True
 
 
 # ==================== Job Embedding Schemas ====================
@@ -127,12 +141,12 @@ class SavedJobResponse(BaseModel):
     id: int
     job_id: int
     user_id: int
-    job_title: Optional[str]
-    company: Optional[str]
-    job_description: Optional[str]
-    match_score: Optional[float]
-    saved_date: str
-    created_at: str
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    job_description: Optional[str] = None
+    match_score: Optional[float] = None
+    saved_date: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -155,6 +169,6 @@ class JobRecommendationRequest(BaseModel):
 class JobRecommendationResponse(BaseModel):
     """Response schema for job recommendations."""
     resume_id: int
-    recommendations: List[JobResponse]
-    total: int
+    recommendations: List[JobMatchResponse]
+    total: int = 0
 

@@ -19,10 +19,9 @@ const ResumeParser = () => {
       try {
         const res = await resumeAPI.getResume(resumeId);
         setResume(res.data);
-        // If already parsed, load preview
+        // If already parsed, load parsed_data
         if (res.data.full_name && res.data.full_name !== 'Uploaded Resume') {
-          const previewRes = await resumeAPI.getResumePreview(resumeId);
-          setParsedData(previewRes.data);
+          setParsedData(res.data.parsed_data || res.data);
         }
       } catch { setError('Failed to load resume.'); }
       finally { setLoading(false); }
@@ -33,10 +32,9 @@ const ResumeParser = () => {
   const handleParse = async () => {
     setIsParsing(true); setError(null);
     try {
-      await resumeAPI.parseResume(resumeId);
-      const previewRes = await resumeAPI.getResumePreview(resumeId);
-      setParsedData(previewRes.data);
-    } catch (err) {
+      const parseRes = await resumeAPI.parseResume(resumeId);
+      setParsedData(parseRes.data.data || parseRes.data);
+    } catch {
       setError('Failed to parse resume. Make sure it is a valid PDF with readable text.');
     } finally { setIsParsing(false); }
   };
@@ -110,7 +108,16 @@ const ResumeParser = () => {
                 <div key={i} className="p-4 bg-white/5 rounded-xl space-y-1">
                   <p className="text-white font-bold">{e.role}</p>
                   <p className="text-slate-400 text-sm">{e.company}</p>
-                  {e.description && <p className="text-slate-500 text-sm line-clamp-2">{e.description}</p>}
+                  {e.points && e.points.length > 0 ? (
+                    <ul className="list-disc list-inside space-y-0.5 mt-2">
+                      {e.points.slice(0, 2).map((point, j) => (
+                        <li key={j} className="text-slate-500 text-xs line-clamp-1">{point}</li>
+                      ))}
+                      {e.points.length > 2 && <li className="text-slate-600 text-[10px] italic">+{e.points.length - 2} more points</li>}
+                    </ul>
+                  ) : (
+                    e.description && <p className="text-slate-500 text-sm line-clamp-2">{e.description}</p>
+                  )}
                 </div>
               ))}
             </div>

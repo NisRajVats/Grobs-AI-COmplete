@@ -26,13 +26,19 @@ const RegisterPage = () => {
       // After successful registration, log the user in automatically
       const loginResponse = await authAPI.login(formData.email, formData.password);
 
-      const { access_token } = loginResponse.data;
+      const { access_token, refresh_token } = loginResponse.data;
+
+      // Store tokens so interceptor can use them
+      localStorage.setItem('token', access_token);
+      if (refresh_token) {
+        localStorage.setItem('refresh_token', refresh_token);
+      }
 
       // Fetch profile
       const userResponse = await authAPI.getCurrentUser();
       
       // Update global auth state
-      authLogin(access_token, userResponse.data);
+      authLogin(access_token, userResponse.data, refresh_token);
 
       navigate('/app/dashboard');
     } catch (err) {

@@ -1,38 +1,32 @@
-"""
-Models package - exports all models for easy importing.
-"""
-from app.models.user import User, SubscriptionPlan, UserSubscription
-from app.models.resume import Resume, ResumeVersion, ResumeAnalysis, ResumeContent, ResumeEmbedding
-from app.models.jobs import Job, JobApplication, SavedJob, JobSkill, JobEmbedding
-from app.models.education import Education
-from app.models.experience import Experience
-from app.models.projects import Project
-from app.models.skills import Skill
-from app.models.notification import Notification
-from app.models.interview import InterviewSession, InterviewQuestion, InterviewAnswer
+# Models package initialization
+from .user import User
+from .resume import Resume, ResumeVersion, ResumeAnalysis, ResumeContent, ResumeEmbedding
+from .education import Education
+from .experience import Experience
+from .projects import Project
+from .skills import Skill
+from .jobs import Job, JobSkill, JobEmbedding, JobApplication, SavedJob
+from .notification import Notification
+from .interview import InterviewSession, InterviewQuestion, InterviewAnswer
 
-# Export all models
 __all__ = [
-    "User",
-    "SubscriptionPlan", 
-    "UserSubscription",
-    "Resume",
-    "ResumeVersion",
-    "ResumeAnalysis",
-    "ResumeContent",
-    "ResumeEmbedding",
-    "Job",
-    "JobApplication",
-    "SavedJob",
-    "JobSkill",
-    "JobEmbedding",
-    "Education",
-    "Experience",
-    "Project",
-    "Skill",
-    "Notification",
-    "InterviewSession",
-    "InterviewQuestion",
-    "InterviewAnswer",
+    'User',
+    'Resume', 
+    'ResumeVersion',
+    'ResumeAnalysis', 
+    'ResumeContent',
+    'ResumeEmbedding',
+    'Education',
+    'Experience',
+    'Project',
+    'Skill',
+    'Job',
+    'JobSkill',
+    'JobEmbedding',
+    'JobApplication',
+    'SavedJob',
+    'Notification',
+    'InterviewSession',
+    'InterviewQuestion',
+    'InterviewAnswer'
 ]
-

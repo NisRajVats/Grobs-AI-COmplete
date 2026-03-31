@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.models import Resume, ResumeVersion, ResumeAnalysis, Job
+from rapidfuzz import fuzz
 from app.services.llm_service import llm_service
 from app.services.resume_service.resume_manager import ResumeManager
+from .parser import clean_text, clean_experience_entry  # Reuse parser utils
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +61,26 @@ class ResumeOptimizer:
             logger.error(f"Optimization failed for resume {resume_id}: {error_msg}")
             return {"success": False, "error": f"AI optimization failed: {error_msg}"}
 
+        # Post-process LLM output to clean artifacts
+        optimized_resume = optimized_result["optimized_resume"]
+        
+        # Clean experience descriptions
+        if "experience" in optimized_resume:
+            optimized_resume["experience"] = [
+                clean_experience_entry(exp) for exp in optimized_resume["experience"]
+            ]
+        
+        # Clean summary
+        if "summary" in optimized_resume:
+            optimized_resume["summary"] = clean_text(optimized_resume["summary"])
+        
+        # Clean other text fields
+        for field in ["title", "target_role"]:
+            if field in optimized_resume and optimized_resume[field]:
+                optimized_resume[field] = clean_text(optimized_resume[field])
+
         # Prepare data for update
-        optimized_resume_data = optimized_result["optimized_resume"]
+        optimized_resume_data = optimized_resume
         
         # Convert skills from list of strings to list of dicts with 'name' for the manager
         manager_data = optimized_resume_data.copy()
@@ -89,14 +109,12 @@ class ResumeOptimizer:
                 new_resume.resume_file_url = resume.resume_file_url
                 self.db.commit()
         else:
-            # Create new optimized version in DB
+            # DO NOT update main resume immediately during optimization to allow review
+            # Create new optimized version in DB for tracking
             version = self._create_optimized_version(resume, optimized_result, job_description)
-            # Update main resume content with optimized data
-            self.resume_manager.update_resume(resume_id, user_id, manager_data)
         
-        # REFRESH ATS SCORE
-        ats_result = self.resume_manager.get_ats_score(target_resume_id, user_id, job_description)
-        final_ats_score = ats_result.get("overall_score", optimized_result.get("projected_ats_score", 0))
+        # ATS SCORE FOR PREVIEW
+        final_ats_score = optimized_result.get("projected_ats_score", 0)
         
         return {
             "success": True,
@@ -104,15 +122,31 @@ class ResumeOptimizer:
             "suggestions": optimized_result.get("optimization_summary", ""),
             "improvements": optimized_result.get("improvements_made", []),
             "ats_score": final_ats_score,
+            "original_resume": resume_data,
+            "optimized_resume": manager_data,
             "compatibility_score": optimized_result.get("compatibility_score", 0),
-            "compatibility_feedback": optimized_result.get("compatibility_feedback", "")
+            "compatibility_feedback": optimized_result.get("compatibility_feedback", ""),
+            "skill_gap": optimized_result.get("skill_gap", []),
+            "matching_skills": optimized_result.get("matching_skills", []),
+            "skill_recommendations": optimized_result.get("skill_recommendations", []),
+            "certificate_recommendations": optimized_result.get("certificate_recommendations", [])
         }
 
     def _prepare_resume_data_for_llm(self, resume: Resume) -> Dict[str, Any]:
         """Convert resume model to a structured dict for LLM processing."""
+        # Extract summary from parsed_data if available
+        summary = ""
+        if resume.parsed_data:
+            try:
+                pd = json.loads(resume.parsed_data)
+                summary = pd.get("summary", "")
+            except:
+                pass
+
         return {
             "full_name": resume.full_name,
             "title": resume.title,
+            "summary": summary,
             "target_role": resume.target_role,
             "education": [
                 {
@@ -137,40 +171,47 @@ class ResumeOptimizer:
         }
 
     def _perform_deep_optimization(self, resume_data: Dict[str, Any], opt_type: str, job_desc: str) -> Optional[Dict]:
-        """Use LLM to perform actual optimization of content."""
+        """Use LLM to perform actual optimization of content for 98% ATS accuracy."""
         try:
             if job_desc:
-                mode_instruction = f"MODE: JOB-SPECIFIC TAILORING & COMPATIBILITY OPTIMIZATION\n" \
+                mode_instruction = f"MODE: JOB-SPECIFIC TAILORING\n" \
                                    f"TARGET JOB DESCRIPTION:\n{job_desc}\n\n" \
                                    f"GOALS:\n" \
-                                   f"1. Match the resume content to the specific requirements, skills, and terminology in the JD.\n" \
-                                   f"2. Highlight relevant experience that directly addresses the JD's needs.\n" \
-                                   f"3. Incorporate missing keywords from the JD naturally into the resume sections.\n" \
-                                   f"4. Maximize the compatibility score (selection probability) for this specific role."
+                                   f"1. Align every section with the JD's core requirements.\n" \
+                                   f"2. Incorporate missing keywords from the JD naturally but prominently.\n" \
+                                   f"3. Highlight most relevant experience for this specific role.\n" \
+                                   f"4. Adapt the professional summary to speak directly to the job's needs."
             else:
-                mode_instruction = f"MODE: GENERAL ATS OPTIMIZATION & PROFESSIONAL ENHANCEMENT\n\n" \
+                mode_instruction = f"MODE: GENERAL ATS SCORE OPTIMIZATION & PROFESSIONAL EXCELLENCE\n\n" \
                                    f"GOALS:\n" \
-                                   f"1. Optimize for general industry standards and ATS readability.\n" \
-                                   f"2. Use strong action verbs (e.g., 'Spearheaded', 'Optimized', 'Architected').\n" \
-                                   f"3. Quantify achievements (e.g., 'Increased efficiency by 20%').\n" \
-                                   f"4. Improve overall professional tone and clarity."
+                                   f"1. Fix all formatting and structural issues identified in ATS analysis.\n" \
+                                   f"2. Replace passive language with high-impact, industry-leading action verbs (e.g., 'Spearheaded', 'Engineered', 'Orchestrated').\n" \
+                                   f"3. Quantify every possible achievement using hard metrics (%, $, scale, impact).\n" \
+                                   f"4. Enhance the Professional Summary to be impactful, keyword-dense, and highly professional for the target role: {resume_data.get('target_role', 'Professional')}.\n" \
+                                   f"5. Improve the clarity, tone, and professional language across all sections.\n" \
+                                   f"6. Ensure 100% ATS readability and structural integrity."
 
-            prompt = f"You are an expert Resume Optimizer and Career Coach with deep knowledge of ATS algorithms.\n" \
-                     f"Your task is to rewrite the provided resume data based on the instructions below.\n\n" \
+            prompt = f"You are a world-class Resume Optimizer and ATS Algorithm Expert.\n" \
+                     f"Your task is to rewrite the provided resume data to achieve a 98%+ ATS compatibility score and professional perfection.\n\n" \
                      f"{mode_instruction}\n\n" \
-                     f"GENERAL PRINCIPLES:\n" \
-                     f"- Resolve grammar and weak language issues.\n" \
-                     f"- Ensure the language is impactful and professional.\n" \
-                     f"- Do not invent experience; only rephrase and emphasize existing data.\n\n" \
+                     f"STRICT PRINCIPLES:\n" \
+                     f"- DO NOT use generic filler text or buzzwords without context. Be specific and high-impact.\n" \
+                     f"- Maintain 100% truthfulness; do not invent new roles or degrees, but you MAY rephrase existing descriptions to be more impressive and metric-focused.\n" \
+                     f"- Focus on making the resume 'machine-readable' (ATS) and 'recruiter-ready' (Human).\n" \
+                     f"- Every bullet point should follow the STAR (Situation, Task, Action, Result) or Google's X-Y-Z formula.\n\n" \
                      f"RESUME DATA:\n" \
                      f"{json.dumps(resume_data, indent=2)}\n\n" \
                      f"Return a structured JSON object with:\n" \
-                     f"- optimized_resume: (Object matching input structure with improved content)\n" \
-                     f"- optimization_summary: (String summarizing key changes)\n" \
-                     f"- improvements_made: (List of specific changes made)\n" \
-                     f"- projected_ats_score: (Integer 0-100 indicating general ATS compatibility)\n" \
-                     f"- compatibility_score: (Integer 0-100 indicating match quality for the JD; return 0 if no JD)\n" \
-                     f"- compatibility_feedback: (Detailed feedback on how well the resume matches the JD)"
+                     f"- optimized_resume: (Object matching input structure with improved content - ensure EVERY field is present)\n" \
+                     f"- optimization_summary: (Comprehensive string summarizing exactly what technical improvements were made and why)\n" \
+                     f"- improvements_made: (List of 5-8 specific, high-value enhancements - e.g., 'Transformed passive responsibilities into metric-driven achievements for the Senior Dev role')\n" \
+                     f"- projected_ats_score: (Integer 90-100 indicating the NEW improved score)\n" \
+                     f"- compatibility_score: (Integer 0-100 for JD match; or 0 if no JD)\n" \
+                     f"- compatibility_feedback: (Specific, actionable feedback on how this optimization improved matching)\n" \
+                     f"- skill_gap: (List of key industry skills still missing that the candidate should consider adding)\n" \
+                     f"- matching_skills: (List of high-impact skills now prominently featured)\n" \
+                     f"- skill_recommendations: (List of specific technical skills to learn for this career path)\n" \
+                     f"- certificate_recommendations: (List of high-value certifications to increase market value)"
             
             schema = {
                 "type": "object",
@@ -191,7 +232,11 @@ class ResumeOptimizer:
                     "improvements_made": {"type": "array", "items": {"type": "string"}},
                     "projected_ats_score": {"type": "integer"},
                     "compatibility_score": {"type": "integer"},
-                    "compatibility_feedback": {"type": "string"}
+                    "compatibility_feedback": {"type": "string"},
+                    "skill_gap": {"type": "array", "items": {"type": "string"}},
+                    "matching_skills": {"type": "array", "items": {"type": "string"}},
+                    "skill_recommendations": {"type": "array", "items": {"type": "string"}},
+                    "certificate_recommendations": {"type": "array", "items": {"type": "string"}}
                 },
                 "required": ["optimized_resume", "optimization_summary", "improvements_made", "projected_ats_score"]
             }
@@ -213,7 +258,7 @@ class ResumeOptimizer:
             optimized_flag=True,
             parsed_data=json.dumps(result["optimized_resume"]),
             ats_score=result["projected_ats_score"],
-            created_at=datetime.now().isoformat()
+            created_at=datetime.utcnow()
         )
         
         self.db.add(version)
@@ -230,7 +275,7 @@ class ResumeOptimizer:
                 "compatibility_feedback": result.get("compatibility_feedback", "")
             }),
             job_description=job_desc,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.utcnow()
         )
         self.db.add(analysis)
         

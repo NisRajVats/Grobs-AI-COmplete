@@ -133,7 +133,7 @@ const Dashboard = () => {
         <div className="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-blue-500/20 blur-[100px] rounded-full"></div>
         
         <div className="relative z-10 flex-1 space-y-4 text-center md:text-left">
-          <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">Welcome Back, <span className="text-blue-400">{user?.full_name || user?.email?.split('@')[0] || 'User'}!</span></h1>
+          <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">Welcome Back, <span className="text-blue-400">{user?.full_name || (user?.email ? user.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'User')}!</span></h1>
           <p className="text-xl text-slate-300">Ready to boost your career with AI?</p>
           <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 pt-4">
             <button onClick={() => navigate('/app/resumes')} className="px-6 py-3 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-500 transition-all flex items-center gap-2">

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authAPI } from '../services/api';
 
@@ -5,10 +6,22 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('user');
-    return savedUser ? JSON.parse(savedUser) : null;
+    try {
+      const savedUser = localStorage.getItem('user');
+      if (savedUser && savedUser !== 'null' && savedUser !== 'undefined') {
+        return JSON.parse(savedUser);
+      }
+    } catch (e) {
+      console.error('Failed to parse saved user:', e);
+    }
+    return null;
   });
-  const [token, setToken] = useState(localStorage.getItem('token'));
+
+  const [token, setToken] = useState(() => {
+    const savedToken = localStorage.getItem('token');
+    return (savedToken && savedToken !== 'null' && savedToken !== 'undefined') ? savedToken : null;
+  });
+
   const [loading, setLoading] = useState(true);
 
   const logout = () => {
@@ -21,15 +34,24 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const initAuth = async () => {
+      // If we have a token but no user, or if we just want to verify the token
       if (token) {
         try {
           const response = await authAPI.getCurrentUser();
           setUser(response.data);
           localStorage.setItem('user', JSON.stringify(response.data));
         } catch (error) {
-          console.error('Auth initialization failed:', error);
+          // If it's a 401, it's just an expired/invalid session, handle quietly
+          if (error.response?.status === 401) {
+            console.log('Session expired or invalid, logging out');
+          } else {
+            console.error('Auth initialization failed:', error);
+          }
           logout();
         }
+      } else {
+        // If no token, make sure user is also null
+        setUser(null);
       }
       setLoading(false);
     };

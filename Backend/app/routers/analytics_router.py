@@ -58,7 +58,7 @@ async def get_user_analytics(
 
         month_apps = [
             a for a in all_applications
-            if a.created_at and month_start.isoformat() <= a.created_at <= month_end.isoformat()
+            if a.created_at and month_start <= a.created_at <= month_end
         ]
         month_interviews = sum(1 for a in month_apps if a.status in ("interview", "offer"))
         month_offers = sum(1 for a in month_apps if a.status == "offer")
@@ -79,13 +79,13 @@ async def get_user_analytics(
 
         month_resumes = [
             r for r in resumes
-            if r.created_at and month_start.isoformat() <= r.created_at <= month_end.isoformat()
+            if r.created_at and month_start <= r.created_at <= month_end
         ]
         avg_score = round(sum(r.ats_score for r in month_resumes) / len(month_resumes), 1) if month_resumes else 0
 
         month_apps = [
             a for a in all_applications
-            if a.created_at and month_start.isoformat() <= a.created_at <= month_end.isoformat()
+            if a.created_at and month_start <= a.created_at <= month_end
         ]
 
         resume_performance.append({
@@ -131,11 +131,11 @@ async def get_user_analytics(
         ]
 
     # --- Recent Activity ---
-    recent_apps = sorted(all_applications, key=lambda a: a.created_at or "", reverse=True)[:5]
+    recent_apps = sorted(all_applications, key=lambda a: a.created_at or datetime.min, reverse=True)[:5]
     recent_activity = []
     for app in recent_apps:
         try:
-            dt = datetime.fromisoformat(app.created_at)
+            dt = app.created_at if isinstance(app.created_at, datetime) else datetime.fromisoformat(app.created_at)
             diff = now - dt
             if diff.days > 0:
                 time_str = f"{diff.days} day{'s' if diff.days > 1 else ''} ago"

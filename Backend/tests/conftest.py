@@ -8,6 +8,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.main import app
 from app.database.session import Base, get_db
+from app.core.config import settings
+
+# Force testing environment
+settings.ENVIRONMENT = "testing"
 
 # Use in-memory SQLite for tests
 TEST_DATABASE_URL = "sqlite:///./test.db"

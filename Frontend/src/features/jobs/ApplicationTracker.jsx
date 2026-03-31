@@ -68,8 +68,8 @@ const ApplicationTracker = () => {
               className="w-full bg-slate-900/50 border border-white/5 rounded-2xl pl-12 pr-4 py-3.5 text-white placeholder:text-slate-600 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30 transition-all font-medium"
             />
           </div>
-          <Button variant="outline" leftIcon={Filter} className="border-white/5 bg-slate-900/50 h-[52px]">Filters</Button>
-          <Button leftIcon={Plus} className="bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-500/20 h-[52px] font-black">
+          <Button variant="outline" leftIcon={Filter} className="border-white/5 bg-slate-900/50 h-13">Filters</Button>
+          <Button leftIcon={Plus} className="bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-500/20 h-13 font-black">
             New Application
           </Button>
         </div>

@@ -21,6 +21,8 @@ const OptimizeResume = lazy(() => import('../features/resume/OptimizeResume'));
 const ResumePreview = lazy(() => import('../features/resume/ResumePreview'));
 const ResumeEdit = lazy(() => import('../features/resume/ResumeEdit'));
 
+const JobOptimization = lazy(() => import('../features/resume/JobOptimization'));
+
 // Job Center Modules
 const JobCenter = lazy(() => import('../features/jobs/JobCenter'));
 const JobSearch = lazy(() => import('../features/jobs/JobSearch'));
@@ -126,6 +128,7 @@ const AppRoutes = () => {
           <Route path="resumes/upload" element={<ResumeUpload />} />
           <Route path="resumes/:resumeId" element={<ResumeDetail />} />
           <Route path="resumes/:resumeId/ats" element={<ATSAnalysis />} />
+          <Route path="resumes/:resumeId/job-optimization" element={<JobOptimization />} />
           <Route path="resumes/:resumeId/optimize" element={<Navigate to="../" relative="path" replace />} />
           <Route path="resumes/:resumeId/preview" element={<ResumePreview />} />
           <Route path="resumes/:resumeId/edit" element={<ResumeEdit />} />

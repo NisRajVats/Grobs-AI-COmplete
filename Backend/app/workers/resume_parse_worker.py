@@ -144,7 +144,7 @@ def process_resume_parsing(resume_id: int, user_id: int) -> dict:
         
         # Update resume status
         resume.status = "parsed"
-        resume.updated_at = datetime.now().isoformat()
+        resume.updated_at = datetime.now()
         
         db.commit()
         

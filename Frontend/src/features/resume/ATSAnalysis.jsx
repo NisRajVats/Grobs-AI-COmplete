@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ShieldCheck, Target, Search, AlertTriangle, CheckCircle2, Sparkles, ArrowRight, BarChart3, Loader2, Zap, RefreshCw, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -7,48 +7,59 @@ import api, { resumeAPI } from '../../services/api';
 const ATSAnalysis = () => {
   const { resumeId } = useParams();
   const navigate = useNavigate();
+  const resultsRef = useRef(null);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [optimizing, setOptimizing] = useState(false);
+  const [error, setError] = useState(null);
   const [optimizationResult, setOptimizationResult] = useState(null);
   const [showComparison, setShowComparison] = useState(false);
 
-  useEffect(() => {
-    fetchAnalysis();
-  }, [resumeId]);
-
-  const fetchAnalysis = async () => {
+  const fetchAnalysis = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setLoading(true);
+    setError(null);
     try {
       const response = await resumeAPI.atsCheck(resumeId, "");
       setAnalysis(response.data);
-    } catch (error) {
-      console.error("ATS Check error:", error);
-      setAnalysis({
-        overall_score: 85,
-        category_scores: { 
-          keyword_optimization: 80, 
-          formatting: 90, 
-          job_match: 75,
-          structure: 85,
-          readability: 88
-        },
-        issues: ["Add more action verbs", "Include quantifiable metrics"],
-        recommendations: ["Use strong action words like 'Led', 'Developed', 'Implemented'", "Add numbers to quantify achievements"],
-        llm_powered: false
-      });
+    } catch (_error) {
+      console.error("ATS Check error:", _error);
+      setError("Failed to load ATS analysis. Please try again.");
+      setAnalysis(null);
     } finally {
       setLoading(false);
     }
+  }, [resumeId]);
+
+  useEffect(() => {
+    fetchAnalysis();
+  }, [fetchAnalysis]);
+
+  useEffect(() => {
+    if (showComparison && resultsRef.current) {
+      setTimeout(() => {
+        resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [showComparison]);
+
+  const handleRefresh = () => {
+    fetchAnalysis(true);
   };
 
   const handleMagicFix = async (issueType = 'comprehensive') => {
     setOptimizing(true);
+    setError(null);
     try {
       const res = await resumeAPI.optimizeResume(resumeId, issueType, "");
-      setOptimizationResult(res.data);
-      setShowComparison(true);
+      if (res.data.success) {
+        setOptimizationResult(res.data);
+        setShowComparison(true);
+      } else {
+        setError(res.data.error || "Optimization failed.");
+      }
     } catch (err) {
       console.error("Optimization error:", err);
+      setError(err.response?.data?.detail || "An error occurred during AI optimization.");
     } finally {
       setOptimizing(false);
     }
@@ -58,7 +69,27 @@ const ATSAnalysis = () => {
     return (
       <div className="flex flex-col items-center justify-center h-96 gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-        <p className="text-slate-400 animate-pulse">Running deep ATS analysis...</p>
+        <p className="text-slate-400 animate-pulse font-bold tracking-widest uppercase text-xs">Running deep ATS analysis...</p>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 gap-6 text-center max-w-md mx-auto">
+        <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center border border-red-500/20">
+          <AlertTriangle className="text-red-400" size={40} />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-bold text-white">Analysis Failed</h2>
+          <p className="text-slate-400">We couldn't analyze your resume at this moment. This might be due to a connection issue or an error with our AI provider.</p>
+        </div>
+        <button 
+          onClick={handleRefresh}
+          className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
+        >
+          <RefreshCw size={18} /> Try Again
+        </button>
       </div>
     );
   }
@@ -101,17 +132,37 @@ const ATSAnalysis = () => {
           <ArrowRight className="rotate-180" size={20} />
         </button>
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
             <h1 className="text-3xl font-bold text-white">ATS Analysis</h1>
             {analysis?.llm_powered && (
               <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest border border-blue-500/30 rounded-lg flex items-center gap-1">
                 <Sparkles size={10} /> AI Powered
               </span>
             )}
+            <button 
+              onClick={handleRefresh}
+              className="p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
+              title="Recalculate ATS Score"
+            >
+              <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+              {loading ? "Recalculating..." : "Refresh"}
+            </button>
           </div>
           <p className="text-slate-400">Resume compatibility check</p>
         </div>
       </div>
+
+      {error && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-sm flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+          <button onClick={() => setError(null)} className="p-1 hover:bg-white/10 rounded-lg">
+            <X size={16} />
+          </button>
+        </motion.div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card-glass p-8 flex flex-col items-center justify-center border-2 border-blue-500/20">
@@ -208,99 +259,109 @@ const ATSAnalysis = () => {
 
       <AnimatePresence>
         {showComparison && optimizationResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8 bg-black/80 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="w-full max-w-5xl h-[85vh] bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden flex flex-col shadow-2xl"
-            >
-              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center">
-                    <Sparkles className="text-blue-400" size={20} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-white uppercase tracking-tight">AI Optimization Results</h2>
-                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Review changes before applying</p>
-                  </div>
+          <motion.div 
+            ref={resultsRef}
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="w-full bg-slate-900/40 backdrop-blur-xl border-2 border-blue-500/20 rounded-3xl overflow-hidden flex flex-col shadow-2xl mt-12 mb-20 scroll-mt-10"
+          >
+            <div className="p-8 border-b border-white/5 flex items-center justify-between bg-blue-500/5">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center">
+                  <Sparkles className="text-blue-400" size={24} />
                 </div>
-                <button 
-                  onClick={() => setShowComparison(false)}
-                  className="p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-colors"
-                >
-                  <X size={24} />
-                </button>
+                <div>
+                  <h2 className="text-2xl font-black text-white uppercase tracking-tight">AI Optimization Results</h2>
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">Review enhancements before applying</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowComparison(false)}
+                className="p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={28} />
+              </button>
+            </div>
+
+            <div className="p-8 space-y-10">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                 <div className="space-y-4">
+                    <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 px-1">
+                      <ArrowRight size={16} className="rotate-180" /> Original Content
+                    </h3>
+                    <div className="p-8 bg-slate-900/50 border border-white/5 rounded-3xl text-slate-400 text-base leading-relaxed">
+                      {optimizationResult.original_resume?.summary || "No summary provided in original resume."}
+                    </div>
+                 </div>
+                 <div className="space-y-4">
+                    <h3 className="text-sm font-black text-blue-500 uppercase tracking-widest flex items-center gap-2 px-1">
+                      <Sparkles size={16} /> AI Enhanced Content
+                    </h3>
+                    <div className="p-8 bg-blue-500/5 border border-blue-500/20 rounded-3xl text-slate-100 text-base leading-relaxed font-medium">
+                      {optimizationResult.optimized_resume?.summary || optimizationResult.suggestions}
+                    </div>
+                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                   <div className="space-y-4">
-                      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 px-1">
-                        <ArrowRight size={14} className="rotate-180" /> Original Content
-                      </h3>
-                      <div className="p-6 bg-slate-900/50 border border-white/5 rounded-2xl text-slate-400 text-sm leading-relaxed blur-[1px] select-none">
-                        The AI has analyzed your resume and identified several areas for improvement. 
-                        Below is a summary of the enhancements made to your professional profile.
+              <div className="space-y-4">
+                <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 px-1">
+                  <CheckCircle2 size={16} className="text-green-400" /> Key Improvements
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {optimizationResult.improvements?.map((imp, i) => (
+                    <div key={i} className="p-5 bg-white/5 border border-white/5 rounded-2xl flex items-center gap-4 text-sm text-slate-200 hover:bg-white/10 transition-colors">
+                      <div className="w-6 h-6 bg-green-500/20 rounded-full flex items-center justify-center shrink-0">
+                        <CheckCircle2 size={12} className="text-green-400" />
                       </div>
-                   </div>
-                   <div className="space-y-4">
-                      <h3 className="text-xs font-black text-blue-500 uppercase tracking-widest flex items-center gap-2 px-1">
-                        <Sparkles size={14} /> AI Enhanced Content
-                      </h3>
-                      <div className="p-6 bg-blue-500/5 border border-blue-500/20 rounded-2xl text-slate-200 text-sm leading-relaxed">
-                        {optimizationResult.suggestions}
-                      </div>
-                   </div>
+                      {imp}
+                    </div>
+                  ))}
                 </div>
+              </div>
 
-                <div className="space-y-4">
-                  <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 px-1">
-                    <CheckCircle2 size={14} className="text-green-400" /> Specific Improvements Made
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {optimizationResult.improvements?.map((imp, i) => (
-                      <div key={i} className="p-4 bg-white/5 border border-white/5 rounded-xl flex items-center gap-3 text-xs text-slate-300">
-                        <div className="w-5 h-5 bg-green-500/20 rounded-full flex items-center justify-center shrink-0">
-                          <CheckCircle2 size={10} className="text-green-400" />
-                        </div>
-                        {imp}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between p-6 bg-green-500/5 border border-green-500/10 rounded-2xl">
-                   <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-green-500/20 rounded-xl flex items-center justify-center">
-                         <Target className="text-green-400" size={24} />
-                      </div>
-                      <div>
-                         <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">New ATS Score</p>
-                         <p className="text-3xl font-black text-white">{optimizationResult.ats_score}% <span className="text-xs text-green-400 font-bold">+{optimizationResult.ats_score - analysis.overall_score} pts</span></p>
-                      </div>
-                   </div>
-                   <div className="flex gap-3">
-                      <button 
-                        onClick={() => setShowComparison(false)}
-                        className="px-6 py-3 text-slate-400 font-bold hover:text-white transition-colors"
-                      >
-                        Discard
-                      </button>
-                      <button 
-                        onClick={() => {
+              <div className="flex flex-col md:flex-row items-center justify-between p-8 bg-green-500/5 border border-green-500/10 rounded-3xl gap-6">
+                 <div className="flex items-center gap-6">
+                    <div className="w-16 h-16 bg-green-500/20 rounded-2xl flex items-center justify-center">
+                       <Target className="text-green-400" size={32} />
+                    </div>
+                    <div>
+                       <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">Projected ATS Score</p>
+                       <p className="text-5xl font-black text-white">{optimizationResult.ats_score}% <span className="text-base text-green-400 font-black ml-2">+{optimizationResult.ats_score - analysis.overall_score} pts</span></p>
+                    </div>
+                 </div>
+                 <div className="flex gap-4 w-full md:w-auto">
+                    <button 
+                      onClick={() => setShowComparison(false)}
+                      className="flex-1 md:flex-none px-8 py-4 text-slate-400 font-black hover:text-white transition-colors uppercase tracking-widest text-sm"
+                    >
+                      Discard Changes
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          setOptimizing(true);
+                          // Apply changes to the original resume
+                          await resumeAPI.updateResume(resumeId, optimizationResult.optimized_resume);
                           setShowComparison(false);
+                          // Refresh analysis to show the new ATS score
                           fetchAnalysis();
-                        }}
-                        className="px-8 py-3 bg-green-600 text-white font-black rounded-xl hover:bg-green-500 transition-all shadow-lg shadow-green-500/20"
-                      >
-                        Apply Changes
-                      </button>
-                   </div>
-                </div>
+                        } catch (err) {
+                          console.error("Apply error:", err);
+                          setError("Failed to apply enhancements.");
+                        } finally {
+                          setOptimizing(false);
+                        }
+                      }}
+                      disabled={optimizing}
+                      className="flex-1 md:flex-none px-12 py-4 bg-green-600 text-white font-black rounded-2xl hover:bg-green-500 transition-all shadow-xl shadow-green-500/20 uppercase tracking-widest text-sm disabled:opacity-50"
+                    >
+                      {optimizing ? 'Applying...' : 'Apply Enhancements'}
+                    </button>
+                 </div>
               </div>
-            </motion.div>
-          </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

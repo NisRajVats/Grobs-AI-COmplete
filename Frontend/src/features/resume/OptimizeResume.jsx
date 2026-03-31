@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Sparkles, ArrowRight, CheckCircle2, RefreshCw, AlertCircle, Loader2, Target, Zap, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';

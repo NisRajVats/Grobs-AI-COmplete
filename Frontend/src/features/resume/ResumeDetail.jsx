@@ -11,16 +11,10 @@ import {
   Clock,
   ChevronRight,
   Trash2,
-  MoreVertical,
-  Link,
   Zap,
-  Loader2,
-  CheckCircle2,
-  AlertCircle,
-  X,
   RefreshCw,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { resumeAPI, jobsAPI } from "../../services/api";
 
 const ResumeDetail = () => {
@@ -32,16 +26,7 @@ const ResumeDetail = () => {
   // Recommendations states
   const [recommendations, setRecommendations] = useState([]);
   const [loadingRecs, setLoadingRecs] = useState(false);
-
-  // Optimization states
-  const [jobDescription, setJobDescription] = useState("");
-  const [jobUrl, setJobUrl] = useState("");
-  const [isTailoring, setIsTailoring] = useState(false);
-  const [fetchingUrl, setFetchingUrl] = useState(false);
-  const [saveAsNew, setSaveAsNew] = useState(true);
-  const [optimizationResult, setOptimizationResult] = useState(null);
-  const [showResult, setShowResult] = useState(false);
-  const [error, setError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchResume = useCallback(async () => {
     try {
@@ -66,6 +51,20 @@ const ResumeDetail = () => {
     }
   }, [resumeId]);
 
+  const handleDelete = async () => {
+    if (!window.confirm("Are you sure you want to delete this resume?")) return;
+    setDeleting(true);
+    try {
+      await resumeAPI.deleteResume(resumeId);
+      navigate("/app/resumes");
+    } catch (err) {
+      console.error("Error deleting resume:", err);
+      alert("Failed to delete resume");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   useEffect(() => {
     const fetchAll = async () => {
       await Promise.all([fetchResume(), fetchRecommendations()]);
@@ -73,88 +72,73 @@ const ResumeDetail = () => {
     fetchAll();
   }, [resumeId, fetchResume, fetchRecommendations]);
 
-  const handleUrlFetch = async () => {
-    if (!jobUrl) return;
-    setFetchingUrl(true);
-    setError(null);
-    try {
-      // Mocking URL fetch for now, in a real app this would call an API
-      // that uses a scraper or AI to extract the JD from a link
-      await new Promise((r) => setTimeout(r, 1500));
-      setJobDescription(
-        "Sample job description fetched from URL: " +
-          jobUrl +
-          "\n\nWe are looking for a Senior Software Engineer with 5+ years of experience in React and Node.js. The ideal candidate should have strong knowledge of AWS and CI/CD pipelines.",
-      );
-    } catch (err) {
-      setError(
-        "Failed to fetch job description from URL. Please paste it manually.",
-      );
-    } finally {
-      setFetchingUrl(false);
-    }
-  };
-
-  const handleTailor = async () => {
-    if (!jobDescription.trim()) return;
-    setIsTailoring(true);
-    setError(null);
-    try {
-      const res = await resumeAPI.optimizeResume(
-        resumeId,
-        "job-specific",
-        jobDescription,
-        null,
-        saveAsNew,
-      );
-      setOptimizationResult(res.data);
-      setShowResult(true);
-    } catch (err) {
-      setError(
-        err.response?.data?.detail || "Tailoring failed. Please try again.",
-      );
-    } finally {
-      setIsTailoring(false);
-    }
-  };
-
   const actions = [
     {
       id: "preview",
       icon: Eye,
       label: "Preview",
       path: `/app/resumes/${resumeId}/preview`,
-      color: "bg-blue-600",
+      color: "from-blue-600 to-blue-500",
+      shadow: "shadow-blue-500/25",
     },
     {
       id: "edit",
       icon: Edit3,
       label: "Edit",
       path: `/app/resumes/${resumeId}/edit`,
-      color: "bg-purple-600",
+      color: "from-violet-600 to-purple-500",
+      shadow: "shadow-purple-500/25",
     },
     {
       id: "ats",
       icon: Target,
       label: "ATS Analysis",
       path: `/app/resumes/${resumeId}/ats`,
-      color: "bg-amber-600",
+      color: "from-amber-500 to-orange-500",
+      shadow: "shadow-amber-500/25",
+    },
+    {
+      id: "optimize",
+      icon: Sparkles,
+      label: "Optimise",
+      path: `/app/resumes/${resumeId}/job-optimization`,
+      color: "from-emerald-600 to-teal-500",
+      shadow: "shadow-emerald-500/25",
     },
     {
       id: "jobs",
       icon: Briefcase,
       label: "Find Jobs",
       path: `/app/resumes/${resumeId}/jobs`,
-      color: "bg-rose-600",
+      color: "from-rose-600 to-pink-500",
+      shadow: "shadow-rose-500/25",
     },
     {
       id: "download",
       icon: Download,
       label: "Download",
       path: `/app/resumes/${resumeId}/download`,
-      color: "bg-slate-600",
+      color: "from-slate-600 to-slate-500",
+      shadow: "shadow-slate-500/25",
     },
   ];
+
+  const score = resume?.latest_analysis?.score || 0;
+  const circumference = 2 * Math.PI * 54;
+  const offset = circumference - (circumference * score) / 100;
+
+  const scoreColor =
+    score >= 80
+      ? "text-emerald-400"
+      : score >= 60
+      ? "text-amber-400"
+      : "text-rose-400";
+  const scoreStroke =
+    score >= 80
+      ? "#34d399"
+      : score >= 60
+      ? "#fbbf24"
+      : "#f87171";
 
   if (loading) {
     return (
@@ -165,387 +149,396 @@ const ResumeDetail = () => {
   }
 
   return (
-    <div className="space-y-8 pb-20">
-      <div className="flex items-start justify-between">
+    <div className="max-w-7xl mx-auto px-1 pb-20 space-y-7">
+
+      {/* ── PAGE HEADER ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+        {/* Left – back + title */}
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate("/app/resumes")}
-            className="p-2 hover:bg-white/10 rounded-xl transition-colors text-slate-400 hover:text-white"
+            className="shrink-0 w-10 h-10 grid place-items-center bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-slate-400 hover:text-white transition-all group"
+            title="Back to My Resumes"
           >
-            <ChevronRight className="rotate-180" size={20} />
+            <ChevronRight
+              className="rotate-180 group-hover:-translate-x-0.5 transition-transform"
+              size={20}
+            />
           </button>
-          <div>
-            <h1 className="text-3xl font-bold text-white">
-              {resume?.filename}
-            </h1>
-            <p className="text-slate-400 flex items-center gap-2 mt-1">
-              <Clock size={14} /> Created {resume?.created_at} • Version{" "}
-              {resume?.version}
-            </p>
+
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="shrink-0 w-10 h-10 bg-blue-600/15 border border-blue-500/20 rounded-xl grid place-items-center">
+              <FileText className="text-blue-400" size={18} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold text-white leading-tight truncate">
+                {resume?.filename}
+              </h1>
+              <div className="flex items-center gap-3 mt-0.5">
+                <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <Clock size={11} className="text-blue-500/70" />
+                  {new Date(resume?.created_at).toLocaleDateString("en-GB", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </span>
+                <span className="w-1 h-1 rounded-full bg-slate-700" />
+                <span className="text-[11px] text-slate-500">
+                  v{resume?.version || "1.0"}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
-        <button className="p-2 hover:bg-white/10 rounded-xl transition-colors text-slate-400 hover:text-rose-400">
-          <Trash2 size={20} />
-        </button>
+
+        {/* Right – actions */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => navigate(`/app/resumes/${resumeId}/preview`)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-blue-600/20"
+          >
+            <Eye size={16} />
+            Preview
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="w-10 h-10 grid place-items-center bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded-xl border border-rose-500/20 transition-all disabled:opacity-50"
+            title="Delete Resume"
+          >
+            {deleting ? (
+              <RefreshCw size={16} className="animate-spin" />
+            ) : (
+              <Trash2 size={16} />
+            )}
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          {/* ATS Quick View */}
-          {resume?.latest_analysis && (
-            <div className="card-glass p-6 border border-blue-500/20 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 bg-blue-600/20 rounded-2xl flex items-center justify-center">
-                  <Target size={32} className="text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">
-                    ATS Compatibility
-                  </p>
-                  <p className="text-3xl font-black text-white">
-                    {resume.latest_analysis.score}%
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => navigate(`/app/resumes/${resumeId}/ats`)}
-                className="px-5 py-2.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 font-bold rounded-xl border border-blue-500/30 transition-all flex items-center gap-2"
-              >
-                <Target size={18} /> View Analysis
-              </button>
-            </div>
-          )}
+      {/* ── BODY GRID ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-7">
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            {actions.map((action) => (
-              <motion.div
-                key={action.id}
-                whileHover={{ y: -4 }}
-                onClick={() => navigate(action.path)}
-                className="card-glass p-6 cursor-pointer hover:bg-white/10 transition-all group text-center"
-              >
-                <div
-                  className={`w-12 h-12 ${action.color} rounded-xl flex items-center justify-center mx-auto mb-3 shadow-lg group-hover:scale-110 transition-transform`}
-                >
-                  <action.icon size={20} className="text-white" />
-                </div>
-                <p className="font-bold text-white group-hover:text-blue-400 transition-colors text-xs uppercase tracking-widest">
-                  {action.label}
-                </p>
-              </motion.div>
-            ))}
-          </div>
+        {/* ── LEFT COLUMN ── */}
+        <div className="space-y-7 min-w-0">
 
-          {/* Skills Section */}
-          {(resume?.skills?.length > 0 ||
-            resume?.parsed_data?.skills?.length > 0) && (
-            <div className="card-glass p-8">
-              <h3 className="font-bold text-white mb-6 flex items-center gap-2">
-                <Zap className="text-amber-400" size={20} /> Detected Technical
-                Skills
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {(resume?.skills?.length > 0
-                  ? resume.skills
-                  : resume.parsed_data.skills
-                ).map((skill, i) => (
-                  <span
-                    key={i}
-                    className="px-4 py-2 bg-slate-900/50 border border-white/5 rounded-xl text-slate-300 text-sm hover:border-blue-500/30 transition-colors cursor-default"
+          {/* HERO CARD */}
+          <div className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-white/3 p-7">
+            {/* decorative blobs */}
+            <div className="pointer-events-none absolute -top-20 -right-20 w-56 h-56 rounded-full bg-blue-600/10 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-20 -left-20 w-56 h-56 rounded-full bg-violet-600/8 blur-3xl" />
+
+            <div className="relative flex flex-col md:flex-row md:items-center gap-8">
+
+              {/* Score ring + copy */}
+              <div className="flex items-center gap-7">
+                {/* Ring */}
+                <div className="relative shrink-0 w-30 h-30">
+                  <svg
+                    viewBox="0 0 120 120"
+                    className="w-full h-full -rotate-90"
                   >
-                    {typeof skill === "string" ? skill : skill.name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Tailoring Sidebar */}
-        <div className="space-y-6">
-          {/* AI Recommendations */}
-          <div className="card-glass p-6 border border-blue-500/10">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
-                <Sparkles className="text-blue-400" size={16} /> Recommended For
-                You
-              </h3>
-              <button
-                onClick={fetchRecommendations}
-                className="p-1.5 hover:bg-white/10 rounded-lg text-slate-500 hover:text-blue-400 transition-colors"
-              >
-                <RefreshCw
-                  size={14}
-                  className={loadingRecs ? "animate-spin" : ""}
-                />
-              </button>
-            </div>
-
-            {loadingRecs ? (
-              <div className="space-y-3">
-                {[1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="h-16 bg-slate-800/50 rounded-xl animate-pulse"
-                  />
-                ))}
-              </div>
-            ) : recommendations.length > 0 ? (
-              <div className="space-y-3">
-                {recommendations.map((rec, i) => (
-                  <div
-                    key={i}
-                    onClick={() => {
-                      setJobDescription(rec.job.job_description || "");
-                      setJobUrl(rec.job.job_link || "");
-                    }}
-                    className="p-3 bg-slate-900/50 border border-white/5 rounded-xl hover:border-blue-500/30 transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-bold text-white truncate pr-2">
-                        {rec.job.job_title}
-                      </p>
-                      <span className="text-[10px] font-black text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded-md border border-blue-500/20">
-                        {rec.match_score}% Match
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 font-medium truncate">
-                      {rec.job.company_name}
-                    </p>
+                    <circle
+                      cx="60" cy="60" r="54"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      fill="none"
+                      className="text-white/5"
+                    />
+                    <circle
+                      cx="60" cy="60" r="54"
+                      stroke={scoreStroke}
+                      strokeWidth="8"
+                      fill="none"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={offset}
+                      strokeLinecap="round"
+                      style={{ transition: "stroke-dashoffset 1s ease-out" }}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className={`text-3xl font-black tabular-nums ${scoreColor}`}>
+                      {score}
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
+                      ATS Score
+                    </span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-4 bg-slate-900/30 rounded-xl border border-dashed border-white/5">
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
-                  No matching jobs found
-                </p>
-              </div>
-            )}
-          </div>
+                </div>
 
-          {/* Tailoring Tool */}
-          <div className="card-glass p-8 border border-green-500/20 relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none">
-              <Sparkles size={80} className="text-green-400" />
-            </div>
-
-            <div className="relative z-10 space-y-6">
-              <div>
-                <h3 className="text-xl font-black text-white flex items-center gap-2">
-                  <Target className="text-green-400" /> Tailor for a Job
-                </h3>
-                <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">
-                  AI-Powered Optimization
-                </p>
-              </div>
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">
-                    Job Link (Auto-extract)
-                  </label>
-                  <div className="flex gap-2">
-                    <div className="flex-1 relative">
-                      <Link
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
-                        size={14}
-                      />
-                      <input
-                        type="text"
-                        value={jobUrl}
-                        onChange={(e) => setJobUrl(e.target.value)}
-                        placeholder="LinkedIn, Indeed, etc."
-                        className="w-full bg-slate-900/50 border border-white/10 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:ring-1 focus:ring-green-500/30 outline-none transition-all"
-                      />
-                    </div>
+                {/* Copy */}
+                <div>
+                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                    Resume Strength
+                  </p>
+                  <p className="text-white font-semibold text-base leading-snug mb-3 max-w-xs">
+                    {score > 80
+                      ? "Excellent — your profile is highly competitive."
+                      : "A few improvements could significantly boost your visibility."}
+                  </p>
+                  <div className="flex items-center gap-4">
                     <button
-                      onClick={handleUrlFetch}
-                      disabled={fetchingUrl || !jobUrl}
-                      className="p-2.5 bg-slate-800 text-white rounded-xl hover:bg-slate-700 disabled:opacity-50 transition-all"
+                      onClick={() => navigate(`/app/resumes/${resumeId}/ats`)}
+                      className="flex items-center gap-1 text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors"
                     >
-                      {fetchingUrl ? (
-                        <Loader2 size={18} className="animate-spin" />
-                      ) : (
-                        <RefreshCw size={18} />
-                      )}
+                      Full Report <ChevronRight size={13} />
+                    </button>
+                    <span className="w-px h-3 bg-white/10" />
+                    <button
+                      onClick={() => navigate(`/app/resumes/${resumeId}/job-optimization`)}
+                      className="flex items-center gap-1 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                    >
+                      Optimise Now <ChevronRight size={13} />
                     </button>
                   </div>
                 </div>
+              </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between px-1">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                      Job Description
-                    </label>
-                    {jobDescription && (
-                      <button
-                        onClick={() => setJobDescription("")}
-                        className="text-[10px] font-bold text-rose-400 hover:text-rose-300 transition-colors uppercase"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    value={jobDescription}
-                    onChange={(e) => setJobDescription(e.target.value)}
-                    placeholder="Paste the job description details here or select a recommendation above..."
-                    className="w-full h-40 bg-slate-900/50 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-green-500/30 outline-none resize-none transition-all leading-relaxed"
-                  />
-                </div>
+              {/* Stats pills */}
+              <div className="flex gap-4 md:ml-auto shrink-0">
+                {[
+                  {
+                    value: (resume?.parsed_data?.experience?.length || (resume?.experience?.length || 0)),
+                    label: "Experiences",
+                  },
 
-                <div className="flex items-center gap-3 px-1">
-                  <button
-                    onClick={() => setSaveAsNew(!saveAsNew)}
-                    className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${saveAsNew ? "bg-green-600 border-green-500" : "bg-slate-900 border-white/10"}`}
+                  {
+                    value: (resume?.parsed_data?.skills?.length || resume?.skills?.length || 0),
+                    label: "Skills",
+                  },
+                ].map(({ value, label }) => (
+                  <div
+                    key={label}
+                    className="flex flex-col items-center justify-center w-28 h-20 rounded-xl bg-white/4 border border-white/[0.07]"
                   >
-                    {saveAsNew && (
-                      <CheckCircle2 size={12} className="text-white" />
-                    )}
-                  </button>
-                  <span className="text-xs text-slate-400 font-medium">
-                    Save as tailored version
-                  </span>
-                </div>
-
-                {error && (
-                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-2 text-rose-400 text-[10px] font-bold">
-                    <AlertCircle size={14} className="shrink-0" />
-                    <p>{error}</p>
+                    <span className="text-2xl font-black text-white tabular-nums">
+                      {value}
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
+                      {label}
+                    </span>
                   </div>
-                )}
-
-                <button
-                  onClick={handleTailor}
-                  disabled={isTailoring || !jobDescription.trim()}
-                  className="w-full py-4 bg-green-600 text-white font-black rounded-2xl hover:bg-green-500 transition-all shadow-lg shadow-green-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isTailoring ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Sparkles size={20} />
-                  )}
-                  {isTailoring ? "AI is Tailoring..." : "Optimize for this Job"}
-                </button>
+                ))}
               </div>
             </div>
           </div>
+
+          {/* ACTION TOOLS */}
+          <div>
+            <p className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4">
+              <Zap size={13} className="text-amber-400" />
+              Management Tools
+            </p>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+              {actions.map((action) => (
+                <motion.button
+                  key={action.id}
+                  whileHover={{ y: -3 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => navigate(action.path)}
+                  className="flex flex-col items-center gap-3 py-5 px-2 rounded-2xl bg-white/3 border border-white/[0.07] hover:border-white/15 hover:bg-white/6 transition-all group"
+                >
+                  <div
+                    className={`w-11 h-11 rounded-xl bg-linear-to-br ${action.color} ${action.shadow} shadow-lg grid place-items-center group-hover:scale-105 transition-transform duration-200`}
+                  >
+                    <action.icon size={20} className="text-white" />
+                  </div>
+                  <span className="text-[10px] font-semibold text-slate-400 group-hover:text-white transition-colors tracking-wide text-center leading-tight">
+                    {action.label}
+                  </span>
+                </motion.button>
+              ))}
+            </div>
+          </div>
+
+          {/* CONTENT CARDS ROW */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+
+            {/* Skills */}
+            {(resume?.skills?.length > 0 || resume?.parsed_data?.skills?.length > 0) && (
+            <div className="rounded-2xl border border-white/[0.07] bg-white/3 p-6">
+              <div className="flex items-center gap-2.5 mb-5">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/20 grid place-items-center">
+                  <Zap className="text-amber-400" size={15} />
+                </div>
+                <h3 className="text-sm font-semibold text-white">Technical Skills</h3>
+              </div>
+                <div className="flex flex-wrap gap-2">
+                  {(resume?.skills?.length > 0
+                    ? resume.skills
+                    : resume.parsed_data.skills
+                  ).map((skill, i) => (
+                    <span
+                      key={i}
+                      className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/8 text-slate-300 text-[11px] font-medium hover:border-blue-500/40 hover:text-white transition-all cursor-default"
+                    >
+                      {typeof skill === "string" ? skill : skill.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Overview */}
+            <div className="rounded-2xl border border-white/[0.07] bg-white/3 p-6">
+              <div className="flex items-center gap-2.5 mb-5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/20 grid place-items-center">
+                  <FileText className="text-blue-400" size={15} />
+                </div>
+                <h3 className="text-sm font-semibold text-white">Quick Overview</h3>
+              </div>
+              {[
+                {
+                  icon: Target,
+                  label: "Primary Role",
+                  value: resume?.parsed_data?.title || resume?.title || "Not Specified",
+                },
+                  {
+                    icon: Briefcase,
+                    label: "Experience Level",
+                    value:
+                      (resume?.parsed_data?.experience?.length || resume?.experience?.length || 0) > 5
+                        ? "Senior"
+                        : (resume?.parsed_data?.experience?.length || resume?.experience?.length || 0) >= 2
+                        ? "Mid-Level"
+                        : "Entry-Level",
+                  },
+                  {
+                    icon: Sparkles,
+                    label: "Contact Email",
+                    value: resume?.parsed_data?.email || resume?.email || "No email found",
+                  },
+                ].map(({ icon: Icon, label, value }) => (
+                  <div key={label} className="flex items-center justify-between py-3.5 gap-4">
+                    <div className="flex items-center gap-2.5">
+                      <Icon size={13} className="text-slate-500 shrink-0" />
+                      <span className="text-[11px] font-medium text-slate-500">{label}</span>
+                    </div>
+                    <span className="text-[12px] font-semibold text-slate-200 text-right truncate max-w-40">
+                      {value}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ── RIGHT SIDEBAR ── */}
+        <div className="space-y-5">
+
+          {/* Smart Match */}
+          <div className="rounded-2xl border border-blue-500/15 bg-white/2 overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 bg-blue-600/[0.04]bg-blue-600/4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="text-blue-400" size={14} />
+                  <span className="text-xs font-bold text-white uppercase tracking-widest">
+                    Smart Match
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-0.5">Top roles matching your profile</p>
+              </div>
+              <button
+                onClick={fetchRecommendations}
+                className="w-7 h-7 grid place-items-center rounded-lg hover:bg-white/10 text-slate-500 hover:text-blue-400 transition-colors"
+              >
+                <RefreshCw size={13} className={loadingRecs ? "animate-spin" : ""} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 space-y-3">
+              {loadingRecs ? (
+                [1, 2, 3].map((i) => (
+                  <div key={i} className="flex gap-3 p-3 rounded-xl bg-white/3 animate-pulse">
+                    <div className="w-9 h-9 rounded-lg bg-white/5 shrink-0" />
+                    <div className="flex-1 space-y-2 py-1">
+                      <div className="h-2.5 bg-white/5 rounded-full w-3/4" />
+                      <div className="h-2 bg-white/5 rounded-full w-1/2" />
+                    </div>
+                  </div>
+                ))
+              ) : recommendations.length > 0 ? (
+                <>
+                  {recommendations.map((rec, i) => (
+                    <div
+                      key={i}
+                      className="group p-4 rounded-xl border border-white/6 bg-white/3 hover:border-blue-500/30 hover:bg-white/6 transition-all cursor-pointer"
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-3">
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-semibold text-white leading-tight group-hover:text-blue-300 transition-colors truncate">
+                            {rec.job.job_title}
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                            {rec.job.company_name}
+                          </p>
+                        </div>
+                        <ChevronRight
+                          size={13}
+                          className="shrink-0 text-slate-600 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all mt-0.5"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex-1 h-1 rounded-full bg-white/6 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-blue-500"
+                            style={{ width: `${rec.match_score}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-bold text-blue-400 tabular-nums shrink-0">
+                          {rec.match_score}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => navigate(`/app/resumes/${resumeId}/jobs`)}
+                    className="w-full py-2.5 mt-1 rounded-xl bg-white/3 hover:bg-white/[0.07] border border-white/6 text-[10px] font-bold text-slate-400 hover:text-white uppercase tracking-widest transition-all"
+                  >
+                    View All Matches
+                  </button>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-white/4 border border-white/6 grid place-items-center mb-3">
+                    <Briefcase size={18} className="text-slate-600" />
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                    No matches found
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Storage Info */}
+          <div className="rounded-2xl border border-white/7 bg-white/3 p-5">
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">
+              File Info
+            </p>
+            <div className="space-y-0 divide-y divide-white/5">
+              {[
+                { label: "Last Activity", value: "Recently" },
+                {
+                  label: "File Type",
+                  value: (resume?.filename?.split(".").pop() || "PDF").toUpperCase(),
+                },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between py-3">
+                  <span className="text-[11px] text-slate-500">{label}</span>
+                  <span className="text-[11px] font-semibold text-slate-300">{value}</span>
+                </div>  
+              ))}
+            </div>
+            <button className="mt-4 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-white/4 hover:bg-white/8 border border-white/[0.07] text-[11px] font-semibold text-slate-400 hover:text-white transition-all">
+              <Download size={13} />
+              Download Backup
+            </button>
+          </div>
         </div>
       </div>
-
-      <AnimatePresence>
-        {showResult && optimizationResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8 bg-black/90 backdrop-blur-md">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 30 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 30 }}
-              className="w-full max-w-4xl h-[85vh] bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-4xl overflow-hidden flex flex-col shadow-2xl"
-            >
-              <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-900/80">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-green-500/20 rounded-2xl flex items-center justify-center">
-                    <Target className="text-green-400" size={28} />
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-black text-white uppercase tracking-tight">
-                      Tailored Success!
-                    </h2>
-                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
-                      Job-specific optimization complete
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowResult(false)}
-                  className="p-2 hover:bg-white/10 rounded-2xl text-slate-400 hover:text-white transition-colors"
-                >
-                  <X size={28} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-8 space-y-10">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="card-glass p-8 border-blue-500/20 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-black text-blue-400 uppercase tracking-widest flex items-center gap-2">
-                        <Target size={14} /> Compatibility
-                      </h4>
-                      <span className="text-4xl font-black text-white">
-                        {optimizationResult.compatibility_score}%
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-400 leading-relaxed italic border-l-2 border-blue-500/30 pl-4">
-                      "{optimizationResult.compatibility_feedback}"
-                    </p>
-                  </div>
-
-                  <div className="card-glass p-8 border-green-500/20 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2">
-                        <Target size={14} /> General ATS Score
-                      </h4>
-                      <span className="text-4xl font-black text-white">
-                        {optimizationResult.ats_score}%
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-green-400 uppercase tracking-widest bg-green-500/10 w-fit px-3 py-1 rounded-full border border-green-500/20">
-                      <Sparkles size={10} /> Improved Profile Strength
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <h4 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
-                    <Sparkles size={18} className="text-amber-400" /> Strategic
-                    Tailoring Summary
-                  </h4>
-                  <div className="p-8 bg-slate-900/60 border border-white/5 rounded-3xl text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
-                    {optimizationResult.suggestions}
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <h4 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
-                    <CheckCircle2 size={18} className="text-green-400" /> Target
-                    Keyword Alignment
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {optimizationResult.improvements?.map((imp, i) => (
-                      <div
-                        key={i}
-                        className="p-4 bg-white/5 border border-white/5 rounded-2xl flex items-center gap-3 text-[11px] font-bold text-slate-400 uppercase tracking-tight"
-                      >
-                        <div className="w-6 h-6 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/20">
-                          <CheckCircle2 size={12} className="text-green-400" />
-                        </div>
-                        {imp}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-8 bg-slate-900/80 border-t border-white/5 flex gap-4">
-                <button
-                  onClick={() => setShowResult(false)}
-                  className="flex-1 py-4 bg-slate-800 text-white font-black rounded-2xl hover:bg-slate-700 transition-all uppercase tracking-widest text-sm"
-                >
-                  Back to Resume
-                </button>
-                <button
-                  onClick={() => navigate(`/app/resumes/${resumeId}/preview`)}
-                  className="flex-1 py-4 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-500 transition-all uppercase tracking-widest text-sm shadow-xl shadow-blue-500/20 flex items-center justify-center gap-2"
-                >
-                  Preview Optimized Version <ArrowRight size={18} />
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };

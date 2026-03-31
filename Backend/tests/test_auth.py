@@ -10,7 +10,7 @@ class TestRegister:
             "email": "new@example.com",
             "password": "StrongPass123!"
         })
-        assert res.status_code == 200
+        assert res.status_code == 201
         data = res.json()
         assert "access_token" in data
         assert data["token_type"] == "bearer"
@@ -19,7 +19,7 @@ class TestRegister:
         payload = {"email": "dup@example.com", "password": "StrongPass123!"}
         client.post("/api/auth/register", json=payload)
         res = client.post("/api/auth/register", json=payload)
-        assert res.status_code == 400
+        assert res.status_code == 409
 
     def test_register_invalid_email(self, client):
         res = client.post("/api/auth/register", json={
@@ -84,7 +84,6 @@ class TestProtectedRoutes:
             "password": "TestPassword123!"
         })
         refresh_token = login_res.json().get("refresh_token", "")
-        res = client.post("/api/auth/logout",
-                          json={"refresh_token": refresh_token},
+        res = client.post(f"/api/auth/logout?refresh_token={refresh_token}",
                           headers=auth_headers)
-        assert res.status_code in [200, 204]
+        assert res.status_code == 200

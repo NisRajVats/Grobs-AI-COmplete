@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, MessageSquare, Lightbulb, CheckCircle2, Sparkles, RefreshCw, BookOpen, Target } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -36,48 +36,48 @@ const PracticeQuestions = () => {
   const [generatedQuestions, setGeneratedQuestions] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Fetch user's resumes
-  useEffect(() => {
-    fetchResumes();
-  }, []);
-
-  // Generate questions when resume is selected
-  useEffect(() => {
-    if (selectedResumeId) {
-      generateQuestionsFromResume(selectedResumeId);
-    }
-  }, [selectedResumeId]);
-
-  const fetchResumes = async () => {
+  const fetchResumes = useCallback(async () => {
     try {
       const response = await api.get('/api/resumes');
       setResumes(response.data);
       if (response.data.length > 0 && !selectedResumeId) {
         setSelectedResumeId(response.data[0].id);
       }
-    } catch (error) {
-      console.error("Error fetching resumes:", error);
+    } catch (_error) {
+      console.error("Error fetching resumes:", _error);
     }
-  };
+  }, [selectedResumeId]);
 
-  const generateQuestionsFromResume = async (resumeId) => {
-    if (!resumeId) return;
+  const generateQuestionsFromResume = useCallback(async (resId) => {
+    if (!resId) return;
     try {
       setLoading(true);
       const response = await api.post('/api/interview/questions', {
-        resume_id: parseInt(resumeId),
+        resume_id: parseInt(resId),
         job_description: ''
       });
       setGeneratedQuestions(response.data);
       // Reset selected question when generating new ones
       setSelectedQuestion(null);
-    } catch (error) {
-      console.error("Error generating questions:", error);
+    } catch (_error) {
+      console.error("Error generating questions:", _error);
       setGeneratedQuestions(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // Fetch user's resumes
+  useEffect(() => {
+    fetchResumes();
+  }, [fetchResumes]);
+
+  // Generate questions when resume is selected
+  useEffect(() => {
+    if (selectedResumeId) {
+      generateQuestionsFromResume(selectedResumeId);
+    }
+  }, [selectedResumeId, generateQuestionsFromResume]);
 
   const categories = [
     { id: 'behavioral', label: 'Behavioral', count: generatedQuestions?.interview_structure?.behavioral_questions?.length || defaultQuestions.behavioral.length },

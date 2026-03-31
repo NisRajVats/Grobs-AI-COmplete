@@ -22,16 +22,19 @@ const LoginPage = () => {
     try {
       const response = await authAPI.login(formData.email, formData.password);
 
-      const { access_token } = response.data;
+      const { access_token, refresh_token } = response.data;
       
       // Store token in localStorage FIRST so the interceptor can use it
       localStorage.setItem('token', access_token);
+      if (refresh_token) {
+        localStorage.setItem('refresh_token', refresh_token);
+      }
       
       // Fetch user profile (now the interceptor will have the token)
       const userResponse = await authAPI.getCurrentUser();
       
       // Update global auth state
-      authLogin(access_token, userResponse.data);
+      authLogin(access_token, userResponse.data, refresh_token);
 
       navigate('/app/dashboard');
     } catch (err) {

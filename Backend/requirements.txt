@@ -1,4 +1,4 @@
-fastapi==0.104.1
+fastapi>=0.110.0
 uvicorn[standard]==0.24.0
 sqlalchemy==2.0.36
 alembic==1.12.1
@@ -40,3 +40,4 @@ pinecone-client>=3.1.0
 weaviate-client>=3.25.0
 chromadb>=0.4.0
 faiss-cpu>=1.7.0
+rapidfuzz>=3.10.0

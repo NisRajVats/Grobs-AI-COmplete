@@ -24,11 +24,12 @@ class ApplicationStatus:
 
 class ApplicationCreate(BaseModel):
     """Schema for creating a job application."""
-    job_id: int
+    job_title: str
+    company: str
+    job_id: Optional[int] = None
     resume_id: Optional[int] = None
-    job_title: Optional[str] = None
-    company: Optional[str] = None
     notes: Optional[str] = None
+    status: str = "applied"
 
 
 class ApplicationUpdate(BaseModel):
@@ -44,17 +45,17 @@ class ApplicationResponse(BaseModel):
     """Response schema for job application."""
     id: int
     user_id: int
-    job_id: int
-    resume_id: Optional[int]
-    job_title: Optional[str]
-    company: Optional[str]
+    job_id: Optional[int] = None
+    resume_id: Optional[int] = None
+    job_title: Optional[str] = None
+    company: Optional[str] = None
     status: str
-    applied_date: Optional[str]
-    follow_up_date: Optional[str]
-    notes: Optional[str]
-    next_step: Optional[str]
-    created_at: str
-    updated_at: str
+    applied_date: Optional[str] = None
+    follow_up_date: Optional[str] = None
+    notes: Optional[str] = None
+    next_step: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

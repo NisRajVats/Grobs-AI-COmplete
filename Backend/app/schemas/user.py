@@ -27,7 +27,9 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
-    bio: Optional[str] = None
+    title: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class UserResponse(UserBase):
@@ -51,13 +53,25 @@ class UserProfileResponse(UserBase):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
-    bio: Optional[str] = None
-    profile_image_url: Optional[str] = None
+    title: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    avatar_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# ==================== Dashboard Schemas ====================
+
+class DashboardStats(BaseModel):
+    """Schema for dashboard statistics."""
+    total_resumes: int
+    avg_ats_score: float
+    total_applications: int
+    total_saved_jobs: int
+    applications_by_status: dict
 
 
 # ==================== Profile Schemas ====================
@@ -76,7 +90,7 @@ class ProfileUpdate(BaseModel):
     phone: Optional[str] = None
     location: Optional[str] = None
     bio: Optional[str] = None
-    profile_image_url: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 # ==================== Notification Schemas ====================
@@ -85,7 +99,8 @@ class NotificationCreate(BaseModel):
     """Schema for creating a notification."""
     title: str
     message: str
-    notification_type: str = "general"
+    type: str = "info"
+    action_url: Optional[str] = None
 
 
 class NotificationResponse(BaseModel):
@@ -94,9 +109,10 @@ class NotificationResponse(BaseModel):
     user_id: int
     title: str
     message: str
-    notification_type: str
+    type: str
     is_read: bool
-    created_at: datetime
+    action_url: Optional[str] = None
+    created_at: str
 
     class Config:
         from_attributes = True

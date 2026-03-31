@@ -3,53 +3,21 @@ Users router for user profile and dashboard management.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from typing import Optional
 
 from app.database.session import get_db
 from app.models import User, Resume, JobApplication, SavedJob
+from app.schemas.user import (
+    UserProfileResponse,
+    UserUpdate as UserProfileUpdate,
+    DashboardStats
+)
 from app.utils.dependencies import get_current_user
 
 from datetime import datetime
 
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
-
-
-# ==================== Schemas ====================
-
-class UserProfileResponse(BaseModel):
-    id: int
-    email: str
-    full_name: Optional[str] = None
-    phone: Optional[str] = None
-    location: Optional[str] = None
-    title: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    avatar_url: Optional[str] = None
-    is_active: bool
-    is_admin: bool
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class UserProfileUpdate(BaseModel):
-    full_name: Optional[str] = None
-    phone: Optional[str] = None
-    location: Optional[str] = None
-    title: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    avatar_url: Optional[str] = None
-
-
-class DashboardStats(BaseModel):
-    total_resumes: int
-    avg_ats_score: float
-    total_applications: int
-    total_saved_jobs: int
-    applications_by_status: dict
 
 
 # ==================== Endpoints ====================

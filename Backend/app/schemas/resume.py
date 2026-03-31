@@ -15,6 +15,7 @@ class EducationBase(BaseModel):
     school: str
     degree: Optional[str] = ""
     major: Optional[str] = None
+    gpa: Optional[str] = None
     start_date: Optional[str] = ""
     end_date: Optional[str] = ""
     year: Optional[str] = None  # Frontend compatibility
@@ -140,7 +141,7 @@ class ResumeUpdate(BaseModel):
     summary: Optional[str] = None
     target_role: Optional[str] = None
     template_name: Optional[str] = None
-    parsed_data: Optional[str] = None
+    parsed_data: Optional[Any] = None
     status: Optional[str] = None
     education: Optional[List[EducationCreate]] = []
     experience: Optional[List[ExperienceCreate]] = []
@@ -165,8 +166,8 @@ class ResumeResponse(BaseModel):
     analysis_score: Optional[int] = None
     status: str
     version: int = 1
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     parsed_data: Optional[Any] = None
 
     class Config:
@@ -176,7 +177,7 @@ class ResumeResponse(BaseModel):
     def from_orm(cls, obj):
         import json
         from app.utils.encryption import decrypt
-        # Convert SQLAlchemy object to Pydantic model
+        # Convert SQLAlchemy object to dict
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         
         # Decrypt sensitive fields for response
@@ -193,11 +194,24 @@ class ResumeResponse(BaseModel):
         data['version'] = len(obj.versions) if hasattr(obj, 'versions') else 1
         
         # Parse JSON fields if they are strings
+        pd = {}
         if data.get('parsed_data') and isinstance(data['parsed_data'], str):
             try:
-                data['parsed_data'] = json.loads(data['parsed_data'])
+                pd = json.loads(data['parsed_data'])
+                if not isinstance(pd, dict):
+                    pd = {}
             except:
-                pass
+                pd = {}
+        
+        # Sync decrypted root fields into parsed_data for consistent preview
+        pd['full_name'] = data.get('full_name')
+        pd['email'] = data.get('email')
+        pd['phone'] = data.get('phone')
+        pd['linkedin_url'] = data.get('linkedin_url')
+        pd['title'] = data.get('title')
+        pd['target_role'] = data.get('target_role')
+        
+        data['parsed_data'] = pd
         
         return cls(**data)
 
@@ -224,6 +238,13 @@ class ResumeDetailResponse(ResumeResponse):
         data['experience'] = [ExperienceCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in ExperienceCreate.model_fields}) for e in obj.experience]
         data['projects'] = [ProjectCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in ProjectCreate.model_fields}) for e in obj.projects]
         data['skills'] = [SkillCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in SkillCreate.model_fields}) for e in obj.skills]
+        
+        # Sync structured sections into parsed_data for consistent preview
+        if isinstance(data['parsed_data'], dict):
+            data['parsed_data']['education'] = data['education']
+            data['parsed_data']['experience'] = data['experience']
+            data['parsed_data']['projects'] = data['projects']
+            data['parsed_data']['skills'] = data['skills']
         
         # Get latest analysis
         if hasattr(obj, 'analyses') and obj.analyses:
@@ -252,7 +273,7 @@ class ResumeContentResponse(BaseModel):
     linkedin_url: Optional[str]
     raw_text: Optional[str]
     skills_list: Optional[List[str]]
-    parsed_at: Optional[str]
+    parsed_at: Optional[datetime]
 
     class Config:
         from_attributes = True
@@ -271,7 +292,7 @@ class ResumeAnalysisResponse(BaseModel):
     analysis_feedback: Optional[dict]
     missing_keywords: Optional[List[str]]
     suggestions: Optional[List[str]]
-    created_at: str
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -284,11 +305,10 @@ class ResumeVersionResponse(BaseModel):
     id: int
     resume_id: int
     version_number: int
-    version_type: str
-    version_label: Optional[str]
-    file_url: Optional[str]
-    ats_score: Optional[int]
-    created_at: str
+    version_label: Optional[str] = None
+    optimized_flag: bool = False
+    ats_score: Optional[int] = None
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -338,4 +358,31 @@ class JobMatchListResponse(BaseModel):
     resume_id: int
     matches: List[JobMatchResponse]
     total: int
+
+
+# ==================== Resume Optimization Schemas ====================
+
+class OptimizeResumeRequest(BaseModel):
+    """Request schema for resume optimization."""
+    optimization_type: str = "comprehensive"
+    job_description: Optional[str] = ""
+    job_id: Optional[int] = None
+    save_as_new: bool = False
+
+
+class OptimizeResumeResponse(BaseModel):
+    """Response schema for resume optimization."""
+    success: bool
+    resume_id: int
+    suggestions: str
+    improvements: List[str]
+    ats_score: int
+    original_resume: Optional[Any] = None
+    optimized_resume: Optional[Any] = None
+    compatibility_score: int
+    compatibility_feedback: str
+    skill_gap: Optional[List[str]] = []
+    matching_skills: Optional[List[str]] = []
+    skill_recommendations: Optional[List[str]] = []
+    certificate_recommendations: Optional[List[str]] = []
 

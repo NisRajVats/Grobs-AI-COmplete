@@ -168,7 +168,7 @@ class ResumePipelineService:
             
             # Update resume status
             resume.status = "parsed"
-            resume.updated_at = datetime.now().isoformat()
+            resume.updated_at = datetime.utcnow()
             
             self.db.commit()
             
@@ -299,11 +299,10 @@ class ResumePipelineService:
             analysis = ResumeAnalysis(
                 resume_id=resume_id,
                 analysis_type="ats",
-                ats_score=ats_result.get("overall_score"),
-                overall_score=ats_result.get("overall_score"),
-                analysis_feedback=ats_result.get("category_scores"),
-                missing_keywords=ats_result.get("issues", []),
-                suggestions=ats_result.get("recommendations", []),
+                score=ats_result.get("overall_score"),
+                feedback=json.dumps(ats_result.get("category_scores", {})),
+                missing_keywords=json.dumps(ats_result.get("issues", [])),
+                suggestions=json.dumps(ats_result.get("recommendations", [])),
                 job_description=job_description if job_description else None
             )
             
@@ -311,7 +310,7 @@ class ResumePipelineService:
             
             # Update resume with score
             resume.status = "analyzed"
-            resume.updated_at = datetime.now().isoformat()
+            resume.updated_at = datetime.utcnow()
             
             self.db.commit()
             
@@ -381,16 +380,16 @@ class ResumePipelineService:
             version = ResumeVersion(
                 resume_id=resume_id,
                 version_number=self._get_next_version_number(resume_id),
-                version_type="optimized",
                 version_label="AI Optimized",
-                parsed_data=response
+                optimized_flag=True,
+                parsed_data=json.dumps(response)
             )
             
             self.db.add(version)
             
             # Update resume status
             resume.status = "optimized"
-            resume.updated_at = datetime.now().isoformat()
+            resume.updated_at = datetime.utcnow()
             
             self.db.commit()
             
@@ -553,6 +552,10 @@ Provide:
         
         # Experience
         for exp_data in data.get("experience", []):
+            description = exp_data.get("description")
+            if not description and exp_data.get("points"):
+                description = "\n".join(exp_data.get("points", []))
+            
             exp = Experience(
                 resume_id=resume.id,
                 company=exp_data.get("company", ""),
@@ -561,19 +564,27 @@ Provide:
                 start_date=exp_data.get("start_date", ""),
                 end_date=exp_data.get("end_date"),
                 current=exp_data.get("current", False),
-                description=exp_data.get("description")
+                description=description
             )
             self.db.add(exp)
         
         # Projects
         for proj_data in data.get("projects", []):
+            description = proj_data.get("description")
+            if not description and proj_data.get("points"):
+                description = "\n".join(proj_data.get("points", []))
+            
+            technologies = proj_data.get("technologies")
+            if isinstance(technologies, list):
+                technologies = ", ".join(technologies)
+            
             proj = Project(
                 resume_id=resume.id,
                 project_name=proj_data.get("project_name", ""),
-                description=proj_data.get("description"),
+                description=description,
                 project_url=proj_data.get("project_url"),
                 github_url=proj_data.get("github_url"),
-                technologies=proj_data.get("technologies")
+                technologies=technologies
             )
             self.db.add(proj)
         

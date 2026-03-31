@@ -72,7 +72,7 @@ const SavedJobs = () => {
   };
 
   return (
-    <div className="space-y-10 max-w-[1200px] mx-auto pb-20 px-2 md:px-6">
+    <div className="space-y-10 max-w-300 mx-auto pb-20 px-2 md:px-6">
       {/* Header Section */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div className="space-y-2">
@@ -205,7 +205,7 @@ const SavedJobs = () => {
       
       {/* Footer Insight */}
       {!loading && jobs.length > 0 && (
-        <Card className="p-8 border-dashed border-white/10 bg-white/[0.02] flex flex-col md:flex-row items-center justify-between gap-6">
+        <Card className="p-8 border-dashed border-white/10 bg-white/5 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="p-3 bg-indigo-500/10 rounded-2xl">
               <Sparkles size={24} className="text-indigo-400" />

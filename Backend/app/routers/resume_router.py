@@ -19,7 +19,14 @@ from app.schemas.resume import (
     ResumeUpdate,
     ResumeResponse,
     ResumeDetailResponse,
-    ATSScoreRequest
+    ATSScoreRequest,
+    OptimizeResumeRequest,
+    OptimizeResumeResponse,
+    ResumeVersionResponse
+)
+from app.schemas.job import (
+    JobMatchResponse,
+    JobRecommendationResponse
 )
 
 from app.integrations.cloud_storage import cloud_storage_service
@@ -193,8 +200,12 @@ async def get_ats_score(
     db: Session = Depends(get_db)
 ):
     """Get ATS score for a resume."""
-    job_description = request.job_description if request else ""
     manager = ResumeManager(db)
+    resume = manager.get_resume(resume_id, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+        
+    job_description = request.job_description if request else ""
     result = manager.get_ats_score(resume_id, current_user.id, job_description)
     
     if not result:
@@ -203,37 +214,116 @@ async def get_ats_score(
     return result
 
 
-@router.post("/{resume_id}/job-match")
+@router.post("/{resume_id}/ats-check")
+async def ats_check(
+    resume_id: int,
+    request: Optional[ATSScoreRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Alias for get_ats_score for frontend compatibility."""
+    return await get_ats_score(resume_id, request, current_user, db)
+
+
+@router.post("/{resume_id}/job-match", response_model=JobRecommendationResponse)
 async def match_jobs(
     resume_id: int,
     limit: int = 10,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Match resume to jobs."""
+    """Match resume to jobs (POST version)."""
+    manager = ResumeManager(db)
+    resume = manager.get_resume(resume_id, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+        
     recommender = JobRecommender(db)
     matches = recommender.match_resume_to_jobs(resume_id, current_user.id, limit)
     
     return {
         "resume_id": resume_id,
-        "matches": [
-            {
-                "job": {
-                    "id": m["job"].id,
-                    "job_title": m["job"].job_title,
-                    "company_name": m["job"].company_name,
-                    "location": m["job"].location,
-                    "job_link": m["job"].job_link
-                },
-                "match_score": m["match_score"],
-                "missing_keywords": m.get("missing_keywords", [])
-            }
-            for m in matches
-        ]
+        "recommendations": matches,
+        "total": len(matches)
     }
 
 
-@router.get("/{resume_id}/versions")
+@router.get("/{resume_id}/job-recommendations", response_model=JobRecommendationResponse)
+async def get_job_recommendations(
+    resume_id: int,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get job recommendations for resume (GET version for frontend)."""
+    return await match_jobs(resume_id, limit, current_user, db)
+
+
+@router.post("/{resume_id}/optimize", response_model=OptimizeResumeResponse)
+async def optimize_resume(
+    resume_id: int,
+    request: OptimizeResumeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Optimize a resume using AI."""
+    manager = ResumeManager(db)
+    resume = manager.get_resume(resume_id, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+        
+    optimizer = ResumeOptimizer(db)
+    try:
+        result = optimizer.optimize_resume(
+            resume_id=resume_id,
+            user_id=current_user.id,
+            optimization_type=request.optimization_type,
+            job_description=request.job_description,
+            job_id=request.job_id,
+            save_as_new=request.save_as_new
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result.get("error", "Optimization failed"))
+            
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error during optimization: {str(e)}")
+
+
+@router.post("/{resume_id}/process-pipeline")
+async def process_resume_pipeline(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Run full resume processing pipeline (parse -> ats-score)."""
+    manager = ResumeManager(db)
+    resume = manager.get_resume(resume_id, current_user.id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+        
+    # 1. Parse (if file exists)
+    if resume.file_path:
+        parsed_data = manager.parse_resume_file(resume_id, current_user.id)
+    else:
+        # If manually created, we already have some data
+        parsed_data = json.loads(resume.parsed_data) if resume.parsed_data else {}
+        
+    # 2. ATS Score
+    ats_result = manager.get_ats_score(resume_id, current_user.id, "")
+    
+    return {
+        "success": True,
+        "resume_id": resume_id,
+        "parsed_data": parsed_data,
+        "ats_result": ats_result
+    }
+
+
+@router.get("/{resume_id}/versions", response_model=List[ResumeVersionResponse])
 async def get_resume_versions(
     resume_id: int,
     current_user: User = Depends(get_current_user),
@@ -242,18 +332,7 @@ async def get_resume_versions(
     """Get all versions of a resume."""
     manager = ResumeManager(db)
     versions = manager.get_resume_versions(resume_id, current_user.id)
-    
-    return [
-        {
-            "id": v.id,
-            "version_number": v.version_number,
-            "version_label": v.version_label,
-            "optimized_flag": v.optimized_flag,
-            "ats_score": v.ats_score,
-            "created_at": v.created_at
-        }
-        for v in versions
-    ]
+    return versions
 
 
 @router.get("/{resume_id}/preview")

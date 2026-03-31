@@ -4,27 +4,13 @@ Notifications router for user notifications.
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
 
 from app.database.session import get_db
 from app.models import User, Notification
+from app.schemas.user import NotificationResponse
 from app.utils.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
-
-
-class NotificationResponse(BaseModel):
-    id: int
-    title: str
-    message: str
-    type: str
-    is_read: bool
-    action_url: Optional[str] = None
-    created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 @router.get("", response_model=List[NotificationResponse])

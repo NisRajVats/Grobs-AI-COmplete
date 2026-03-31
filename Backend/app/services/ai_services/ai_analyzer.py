@@ -1,23 +1,17 @@
 """
-AI analyzer service using Gemini API.
+AI analyzer service using unified LLM service.
 """
-import os
 import json
-import re
+import logging
 from typing import Dict, Any
-from google import genai
-from dotenv import load_dotenv
+from app.services.llm_service import llm_service
 
-load_dotenv()
-
-api_key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key) if api_key else None
-model_name = 'gemini-2.5-flash'
+logger = logging.getLogger(__name__)
 
 
 def analyze_resume_with_ai(resume, job_description: str) -> Dict[str, Any]:
     """
-    Analyze a resume against job description using Gemini API.
+    Analyze a resume against job description using unified LLM service.
     
     Args:
         resume: Resume model instance
@@ -26,13 +20,6 @@ def analyze_resume_with_ai(resume, job_description: str) -> Dict[str, Any]:
     Returns:
         Dictionary with analysis results
     """
-    if not client:
-        return {
-            "score": 50,
-            "missing_keywords": ["AI not configured"],
-            "suggestions": "Configure GEMINI_API_KEY for AI analysis"
-        }
-    
     resume_text = f"""
 NAME: {resume.full_name}
 EMAIL: {resume.email}
@@ -68,25 +55,28 @@ Provide analysis as valid JSON with exactly these fields:
 Return ONLY valid JSON, no markdown."""
 
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt
+        schema = {
+            "type": "object",
+            "properties": {
+                "score": {"type": "number"},
+                "missing_keywords": {"type": "array", "items": {"type": "string"}},
+                "suggestions": {"type": "string"}
+            },
+            "required": ["score", "missing_keywords", "suggestions"]
+        }
+        
+        result = llm_service.generate_structured_output(
+            prompt=prompt,
+            schema=schema
         )
-        response_text = response.text.strip()
         
-        # Extract JSON
-        json_text = response_text
-        if '```' in response_text:
-            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
-            if json_match:
-                json_text = json_match.group(1).strip()
-        
-        if not json_text.startswith('{'):
-            json_match = re.search(r'\{[\s\S]*\}', json_text)
-            if json_match:
-                json_text = json_match.group(0)
-        
-        result = json.loads(json_text)
+        if "error" in result:
+            logger.error(f"LLM service returned error: {result['error']}")
+            return {
+                "score": 50,
+                "missing_keywords": ["AI analysis failed"],
+                "suggestions": f"Could not complete analysis: {result['error']}"
+            }
         
         return {
             "score": result.get("score", 50),
@@ -95,7 +85,7 @@ Return ONLY valid JSON, no markdown."""
         }
         
     except Exception as e:
-        print(f"Error in AI analysis: {e}")
+        logger.error(f"Error in AI analysis: {e}")
         return {
             "score": 50,
             "missing_keywords": ["Analysis error"],

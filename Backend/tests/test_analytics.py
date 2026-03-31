@@ -13,8 +13,9 @@ class TestAnalytics:
         res = client.get("/api/analytics/user", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
-        assert "total_applications" in data
-        assert "resume_count" in data
+        assert "keyMetrics" in data
+        assert "totalApplications" in data["keyMetrics"]
+        assert "avgResumeScore" in data["keyMetrics"]
 
     def test_get_analytics_7d(self, client, auth_headers):
         res = client.get("/api/analytics/user?time_range=7d", headers=auth_headers)
@@ -24,4 +25,4 @@ class TestAnalytics:
         res = client.get("/api/analytics/user?time_range=90d", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
-        assert "monthly_applications" in data
+        assert "applicationTrend" in data["keyMetrics"]

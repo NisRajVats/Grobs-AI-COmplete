@@ -4,50 +4,18 @@ Applications router for job application tracking.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
 
 from app.database.session import get_db
 from app.models import User, JobApplication, Notification
+from app.schemas.application import (
+    ApplicationCreate,
+    ApplicationUpdate,
+    ApplicationResponse
+)
 from app.utils.dependencies import get_current_user
 from datetime import datetime
 
 router = APIRouter(prefix="/api/applications", tags=["Applications"])
-
-
-# ==================== Schemas ====================
-
-class ApplicationCreate(BaseModel):
-    job_id: Optional[int] = None
-    resume_id: Optional[int] = None
-    job_title: str
-    company: str
-    status: str = "applied"
-    notes: Optional[str] = None
-
-
-class ApplicationUpdate(BaseModel):
-    status: Optional[str] = None
-    notes: Optional[str] = None
-    next_step: Optional[str] = None
-    follow_up_date: Optional[str] = None
-
-
-class ApplicationResponse(BaseModel):
-    id: int
-    user_id: int
-    job_id: int
-    resume_id: Optional[int]
-    job_title: str
-    company: str
-    status: str
-    applied_date: Optional[str]
-    follow_up_date: Optional[str]
-    notes: Optional[str]
-    next_step: Optional[str]
-    created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 # ==================== Endpoints ====================
@@ -148,7 +116,7 @@ async def update_application(
     if update_data.follow_up_date is not None:
         application.follow_up_date = update_data.follow_up_date
     
-    application.updated_at = datetime.now().isoformat()
+    application.updated_at = datetime.now()
     
     db.commit()
     db.refresh(application)

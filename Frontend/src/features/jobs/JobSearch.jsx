@@ -17,7 +17,7 @@ const JobSearch = () => {
     try {
       let response = query.trim() ? await jobsAPI.searchJobs(query, 50) : await jobsAPI.getJobs(0, 50);
       setJobs(response.data.jobs || []); setTotalJobs(response.data.total || 0);
-    } catch (err) {
+    } catch {
       setError('Failed to load jobs. Make sure the backend is running.');
     } finally { setLoading(false); }
   }, []);
@@ -26,7 +26,7 @@ const JobSearch = () => {
     try {
       const res = await jobsAPI.getSavedJobs();
       setSavedJobIds(new Set((res.data || []).map(j => j.job_id || j.id)));
-    } catch {}
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => { fetchJobs(); fetchSavedJobs(); }, [fetchJobs, fetchSavedJobs]);
@@ -43,7 +43,7 @@ const JobSearch = () => {
         await jobsAPI.saveJob(jobId);
         setSavedJobIds(prev => new Set([...prev, jobId]));
       }
-    } catch {} finally { setSavingJobId(null); }
+    } catch { /* ignore */ } finally { setSavingJobId(null); }
   };
 
   const formatDate = (dateStr) => {

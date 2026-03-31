@@ -17,8 +17,10 @@ class TestResumeEndpoints:
 
     def test_create_resume(self, client, auth_headers):
         res = client.post("/api/resumes", json={
+            "full_name": "John Doe",
+            "email": "john@example.com",
             "title": "My Software Engineer Resume",
-            "content": "John Doe | Software Engineer | john@example.com"
+            "summary": "Software Engineer with 5 years of experience"
         }, headers=auth_headers)
         assert res.status_code in [200, 201]
         data = res.json()
@@ -54,5 +56,21 @@ class TestATSEndpoints:
     def test_ats_check_no_resume(self, client, auth_headers):
         res = client.post("/api/resumes/99999/ats-check",
                           json={"job_description": "React developer"},
+                          headers=auth_headers)
+        assert res.status_code == 404
+
+    def test_job_recommendations_no_resume(self, client, auth_headers):
+        res = client.get("/api/resumes/99999/job-recommendations",
+                         headers=auth_headers)
+        assert res.status_code == 404
+
+    def test_optimize_resume_no_resume(self, client, auth_headers):
+        res = client.post("/api/resumes/99999/optimize",
+                          json={"optimization_type": "comprehensive"},
+                          headers=auth_headers)
+        assert res.status_code == 404
+
+    def test_process_pipeline_no_resume(self, client, auth_headers):
+        res = client.post("/api/resumes/99999/process-pipeline",
                           headers=auth_headers)
         assert res.status_code == 404
