@@ -46,6 +46,9 @@ Backend/backend.log
 Backend/uploads/
 Backend/data/
 Backend/chroma_db/
+uploads/
+data/
+chroma_db/
 
 # Node/React
 node_modules/
