@@ -120,24 +120,24 @@ const JobOptimization = () => {
             Current Resume Preview
           </div>
           <div className="card-glass h-150 overflow-y-auto p-8 bg-white text-slate-900 rounded-2xl shadow-2xl">
-            {resume?.parsed_data ? (
+            {resume ? (
               <div className="space-y-6 text-sm">
                 <div className="text-center border-b pb-4">
-                  <h2 className="text-2xl font-bold uppercase">{resume.parsed_data.full_name || resume.filename}</h2>
-                  <p className="text-slate-600 font-medium">{resume.parsed_data.title}</p>
+                  <h2 className="text-2xl font-bold uppercase">{resume.parsed_data?.full_name || resume.full_name || resume.filename}</h2>
+                  <p className="text-slate-600 font-medium">{resume.parsed_data?.title || resume.title}</p>
                 </div>
                 
-                {resume.parsed_data.summary && (
+                {(resume.parsed_data?.summary || resume.summary) && (
                   <div>
                     <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Professional Summary</h3>
-                    <p className="leading-relaxed">{resume.parsed_data.summary}</p>
+                    <p className="leading-relaxed">{resume.parsed_data?.summary || resume.summary}</p>
                   </div>
                 )}
 
                 <div>
                   <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Experience</h3>
                   <div className="space-y-4">
-                    {(resume.parsed_data.experience || []).map((exp, i) => (
+                    {(resume.parsed_data?.experience || resume.experience || []).map((exp, i) => (
                       <div key={i}>
                         <div className="flex justify-between font-bold">
                           <span>{exp.role}</span>
@@ -153,7 +153,7 @@ const JobOptimization = () => {
                 <div>
                   <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Skills</h3>
                   <div className="flex flex-wrap gap-2">
-                    {(resume.parsed_data.skills || []).map((skill, i) => (
+                    {(resume.parsed_data?.skills || resume.skills || []).map((skill, i) => (
                       <span key={i} className="px-2 py-1 bg-slate-100 rounded border text-xs">
                         {typeof skill === 'string' ? skill : skill.name}
                       </span>

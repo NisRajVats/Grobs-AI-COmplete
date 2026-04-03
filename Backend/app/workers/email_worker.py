@@ -5,7 +5,7 @@ This worker processes email jobs from the queue.
 """
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime
+from app.utils.email_service import send_email
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,6 @@ def process_email(
     try:
         logger.info(f"[EmailWorker] Sending email to {recipient_email}")
         
-        # Import email service
-        from app.utils.email_service import send_email
-        
         # Send email
         result = send_email(
             to_email=recipient_email,
@@ -47,17 +44,10 @@ def process_email(
         
         if result.get("success"):
             logger.info(f"[EmailWorker] Email sent successfully to {recipient_email}")
-            return {
-                "success": True,
-                "message_id": result.get("message_id"),
-                "recipient": recipient_email
-            }
         else:
             logger.error(f"[EmailWorker] Failed to send email to {recipient_email}: {result.get('error')}")
-            return {
-                "success": False,
-                "error": result.get("error")
-            }
+            
+        return result
             
     except Exception as e:
         logger.error(f"[EmailWorker] Error sending email to {recipient_email}: {str(e)}")
@@ -67,32 +57,22 @@ def process_email(
 def process_interview_reminder(
     recipient_email: str,
     user_name: str,
-    interview_date: str,
+    job_title: str,
     company: str,
-    position: str
+    interview_date: str,
+    interview_time: str
 ) -> dict:
-    """
-    Send interview reminder email.
-    
-    Args:
-        recipient_email: Recipient's email
-        user_name: User's name
-        interview_date: Interview date/time
-        company: Company name
-        position: Position title
-        
-    Returns:
-        Result dictionary
-    """
+    """Send interview reminder email."""
     return process_email(
         recipient_email=recipient_email,
-        subject=f"Interview Reminder: {position} at {company}",
+        subject=f"Interview Reminder: {job_title} at {company}",
         template_name="interview_reminder",
         template_data={
             "user_name": user_name,
-            "interview_date": interview_date,
+            "job_title": job_title,
             "company": company,
-            "position": position
+            "interview_date": interview_date,
+            "interview_time": interview_time
         }
     )
 
@@ -104,19 +84,7 @@ def process_job_match_notification(
     company: str,
     match_score: int
 ) -> dict:
-    """
-    Send job match notification email.
-    
-    Args:
-        recipient_email: Recipient's email
-        user_name: User's name
-        job_title: Job title
-        company: Company name
-        match_score: Match percentage
-        
-    Returns:
-        Result dictionary
-    """
+    """Send job match notification email."""
     return process_email(
         recipient_email=recipient_email,
         subject=f"New Job Match: {job_title} at {company}",
@@ -136,18 +104,7 @@ def process_resume_analysis_notification(
     resume_title: str,
     ats_score: int
 ) -> dict:
-    """
-    Send resume analysis completion notification.
-    
-    Args:
-        recipient_email: Recipient's email
-        user_name: User's name
-        resume_title: Resume title
-        ats_score: ATS score
-        
-    Returns:
-        Result dictionary
-    """
+    """Send resume analysis completion notification."""
     return process_email(
         recipient_email=recipient_email,
         subject=f"Resume Analysis Complete: {resume_title}",
@@ -160,12 +117,11 @@ def process_resume_analysis_notification(
     )
 
 
-# Celery task wrapper (if Celery is available)
+# Celery task wrapper
 try:
-    from celery import Celery
-    celery_app = Celery('email_worker')
+    from celery import shared_task
     
-    @celery_app.task(name='email_worker.send')
+    @shared_task(name='email_worker.process')
     def celery_process_email(
         recipient_email: str,
         subject: str,
@@ -175,17 +131,18 @@ try:
     ):
         return process_email(recipient_email, subject, template_name, template_data, attachments)
     
-    @celery_app.task(name='email_worker.interview_reminder')
+    @shared_task(name='email_worker.interview_reminder')
     def celery_process_interview_reminder(
         recipient_email: str,
         user_name: str,
-        interview_date: str,
+        job_title: str,
         company: str,
-        position: str
+        interview_date: str,
+        interview_time: str
     ):
-        return process_interview_reminder(recipient_email, user_name, interview_date, company, position)
+        return process_interview_reminder(recipient_email, user_name, job_title, company, interview_date, interview_time)
     
-    @celery_app.task(name='email_worker.job_match')
+    @shared_task(name='email_worker.job_match')
     def celery_process_job_match_notification(
         recipient_email: str,
         user_name: str,
@@ -195,7 +152,7 @@ try:
     ):
         return process_job_match_notification(recipient_email, user_name, job_title, company, match_score)
     
-    @celery_app.task(name='email_worker.resume_analysis')
+    @shared_task(name='email_worker.resume_analysis')
     def celery_process_resume_analysis_notification(
         recipient_email: str,
         user_name: str,
@@ -205,5 +162,4 @@ try:
         return process_resume_analysis_notification(recipient_email, user_name, resume_title, ats_score)
         
 except ImportError:
-    pass
-
+    logger.warning("Celery not found, email tasks will not be available as background jobs")

@@ -5,137 +5,313 @@ import re
 import json
 import logging
 from typing import Dict, List, Optional
+from datetime import datetime
+
 from app.models import Resume
 from app.services.llm_service import llm_service
+from .matcher import match_skills # Use our new skill matching utility
 
 logger = logging.getLogger(__name__)
 
+# Heuristic Constants
+ACTION_VERBS = {
+    "managed", "developed", "led", "created", "increased", "reduced", "spearheaded", "implemented", 
+    "designed", "achieved", "orchestrated", "engineered", "facilitated", "mentored", "optimized",
+    "streamlined", "pioneered", "navigated", "captured", "generated", "maximized", "negotiated"
+}
+BUZZWORDS = {"team player", "hard worker", "detail-oriented", "results-driven", "passionate", "self-motivated", "go-getter"}
+QUANTIFIABLE_PATTERN = re.compile(r'\d+%|\$\d+|\d+\s?users|\d+\s?x|revenue|growth|saved|reduced\sby\s\d+', re.IGNORECASE)
+DATE_PATTERN = re.compile(r'(?:\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{4})|(?:\d{2}/\d{4})|(?:\d{4})\b', re.IGNORECASE)
 
-def calculate_ats_score(resume: Resume) -> Dict:
+async def calculate_ats_score(resume: Resume, job_description: str = "") -> Dict:
     """
-    Analyze a resume for general ATS compatibility with 98% accuracy.
-    Uses a hybrid approach of heuristic checks and LLM deep analysis.
-    
-    Args:
-        resume: Resume model instance
-        
-    Returns:
-        Dictionary with scores and recommendations
+    Analyze a resume using a hybrid approach:
+    1. Fast Heuristics: Immediate structural and formatting validation.
+    2. LLM Deep Analysis: Precision-driven industry alignment and keyword gaps.
     """
-    # Ensure latest API keys from .env are loaded
-    llm_service.refresh_config()
-    
-    # 1. Prepare resume text representation
+    # 1. Prepare resume text and run Fast Heuristics
     resume_text = _prepare_resume_text(resume)
+    heuristics = _calculate_heuristic_scores(resume, resume_text)
     
-    # 2. Heuristic baseline scores
-    heuristic_scores = {}
-    heuristic_scores['contact_info'] = _check_contact_info(resume)
-    heuristic_scores['formatting'] = _check_formatting_compatibility(resume_text)
-    heuristic_scores['structure'] = _check_resume_structure(resume)
-    heuristic_scores['readability'] = _check_ats_readability(resume_text)
-    heuristic_scores['keyword_optimization'] = _check_keyword_optimization(resume_text)
+    # 2. Perform deep analysis using LLM
+    target_context = job_description or resume.target_role or "general"
+    llm_analysis = await _perform_llm_analysis(resume_text, target_context, job_description)
     
-    # 3. LLM-powered deep analysis
-    llm_analysis = _perform_llm_analysis(resume_text, resume.target_role)
-    
-    # 4. Final score calculation
-    if llm_analysis and "overall_score" in llm_analysis:
-        overall_score = llm_analysis["overall_score"]
+    # 3. Augment with Deterministic Skill Matching (if JD provided)
+    skill_match_rate = 0
+    if job_description and llm_analysis:
+        resume_skills = [s.name for s in resume.skills]
+        # Extract skills from JD using LLM output as a base or doing basic extraction
+        jd_skills = llm_analysis.get("keyword_gap", {}).get("matched", []) + llm_analysis.get("keyword_gap", {}).get("missing", [])
         
-        # Merge scores
-        category_scores = {
-            **heuristic_scores,
-            'keyword_optimization': llm_analysis.get("keyword_optimization_score", heuristic_scores['keyword_optimization']),
-            'semantic_relevance': llm_analysis.get("semantic_relevance_score", 0),
-            'industry_alignment': llm_analysis.get("industry_alignment_score", 0)
-        }
-        
-        issues = llm_analysis.get("issues", [])
-        recommendations = llm_analysis.get("recommendations", [])
+        if jd_skills:
+            deterministic_match = match_skills(resume_skills, jd_skills)
+            skill_match_rate = deterministic_match.get("match_rate", 0)
             
-    else:
-        # Fallback to enhanced heuristic if LLM fails
-        overall_score = int((
-            heuristic_scores['contact_info'] * 0.15 +
-            heuristic_scores['formatting'] * 0.20 +
-            heuristic_scores['keyword_optimization'] * 0.25 +
-            heuristic_scores['structure'] * 0.20 +
-            heuristic_scores['readability'] * 0.20
-        ))
+            # Update keyword gap with deterministic results for higher accuracy
+            llm_analysis["keyword_gap"]["matched"] = deterministic_match.get("matched", [])
+            llm_analysis["keyword_gap"]["missing"] = deterministic_match.get("missing", [])
+            
+            # Recalculate keyword optimization score to be more data-driven
+            llm_analysis["keyword_optimization_score"] = int((llm_analysis["keyword_optimization_score"] * 0.4) + (skill_match_rate * 0.6))
+
+    # 4. Merge Results (Hybrid Logic)
+    if not llm_analysis:
+        logger.warning(f"LLM analysis failed for resume {resume.id}, falling back to heuristics.")
+        return {
+            'overall_score': heuristics['score'],
+            'category_scores': heuristics['categories'],
+            'issues': heuristics['issues'] + ["Advanced AI analysis currently unavailable; showing structural results."],
+            'recommendations': heuristics['recommendations'],
+            'skill_analysis': {'hard_skills': [], 'soft_skills': [], 'tools': []},
+            'keyword_gap': {'matched': [], 'missing': [], 'optional': []},
+            'industry_tips': ["Optimize your resume for technical keywords to improve AI analysis results."],
+            'llm_powered': False,
+            'status': 'Partial'
+        }
+
+    # Combine Heuristic Foundation with LLM Precision
+    # We weigh LLM results higher but keep heuristic sanity checks
+    combined_score = int((heuristics['score'] * 0.3) + (llm_analysis.get("overall_score", 0) * 0.7))
+    
+    return {
+        'overall_score': combined_score,
+        'category_scores': {
+            'keyword_optimization': llm_analysis.get("keyword_optimization_score", 0),
+            'semantic_relevance': llm_analysis.get("semantic_relevance_score", 0),
+            'industry_alignment': llm_analysis.get("industry_alignment_score", 0),
+            'formatting': int((heuristics['categories']['formatting'] + llm_analysis.get("formatting_score", 0)) / 2),
+            'structure': int((heuristics['categories']['structure'] + llm_analysis.get("structure_score", 0)) / 2),
+            'readability': int((heuristics['categories']['readability'] + llm_analysis.get("readability_score", 0)) / 2),
+            'contact_info': int((heuristics['categories']['contact_info'] + llm_analysis.get("contact_info_score", 0)) / 2),
+            'professional_presence': int((heuristics['categories'].get('professional_presence', 50) + llm_analysis.get("presence_score", 0)) / 2)
+        },
+        'issues': list(set(heuristics['issues'] + llm_analysis.get("issues", []))),
+        'recommendations': list(set(heuristics['recommendations'] + llm_analysis.get("recommendations", []))),
+        'skill_analysis': llm_analysis.get("skill_analysis", {}),
+        'keyword_gap': llm_analysis.get("keyword_gap", {}),
+        'industry_tips': llm_analysis.get("industry_tips", []),
+        'llm_powered': True,
+        'status': 'Complete'
+    }
+
+
+def _calculate_heuristic_scores(resume: Resume, text: str) -> Dict:
+    """Fast, deterministic checks for resume structure and content."""
+    issues = []
+    recommendations = []
+    categories = {
+        'formatting': 100,
+        'structure': 100,
+        'readability': 100,
+        'contact_info': 100,
+        'professional_presence': 100
+    }
+
+    # 1. Contact Info Check
+    contact_score = 0
+    if resume.email: contact_score += 40
+    else: issues.append("Missing professional email address.")
+    
+    if resume.phone: contact_score += 30
+    else: issues.append("Phone number not found.")
+    
+    if resume.linkedin_url: contact_score += 30
+    else: 
+        issues.append("LinkedIn profile link missing.")
+        recommendations.append("Add your LinkedIn profile to increase recruiter trust.")
+    categories['contact_info'] = contact_score
+
+    # 2. Professional Presence (GitHub/Portfolio/Links)
+    presence_score = 0
+    links_found = re.findall(r'https?://(?:www\.)?github\.com/[^\s]+|https?://(?:www\.)?[\w-]+\.(?:com|io|me|net)/[^\s]+', text)
+    if any("github.com" in link for link in links_found):
+        presence_score += 50
+    if len(links_found) > 1:
+        presence_score += 50
+    categories['professional_presence'] = presence_score if presence_score > 0 else 50 # Default 50 if no extra links
+
+    # 3. Structure & Sections
+    structure_score = 100
+    if not resume.education:
+        structure_score -= 30
+        issues.append("Education section is missing or could not be parsed.")
+    if not resume.experience:
+        structure_score -= 40
+        issues.append("Work experience section is missing.")
+    if not resume.skills:
+        structure_score -= 30
+        issues.append("Skills section is empty or missing.")
+    
+    # Check for summary
+    if not getattr(resume, 'summary', ''):
+        structure_score -= 10
+        recommendations.append("Add a professional summary to quickly highlight your value proposition.")
+
+    categories['structure'] = max(0, structure_score)
+
+    # 4. Readability & Content Quality
+    readability_score = 100
+    word_count = len(text.split())
+    if word_count < 200:
+        readability_score -= 30
+        issues.append("Resume is too short; provide more detail about your roles.")
+    elif word_count > 1200:
+        readability_score -= 20
+        issues.append("Resume is exceptionally long; consider trimming to 1-2 pages.")
+
+    # Quantifiable metrics check
+    metrics_found = len(QUANTIFIABLE_PATTERN.findall(text))
+    if metrics_found < 3:
+        readability_score -= 20
+        recommendations.append("Include more quantifiable achievements (e.g., 'Increased sales by 20%').")
+    
+    # Action verb check
+    found_verbs = [v for v in ACTION_VERBS if v.lower() in text.lower()]
+    if len(found_verbs) < 5:
+        readability_score -= 10
+        recommendations.append("Use more strong action verbs (e.g., 'Spearheaded', 'Orchestrated') to describe your impact.")
+
+    # Buzzword check
+    found_buzzwords = [b for b in BUZZWORDS if b.lower() in text.lower()]
+    if found_buzzwords:
+        readability_score -= len(found_buzzwords) * 2
+        recommendations.append(f"Replace generic buzzwords ({', '.join(found_buzzwords)}) with specific achievements.")
+
+    categories['readability'] = max(0, readability_score)
+
+    # 5. Experience Depth & Date Consistency
+    formatting_score = 100
+    for exp in resume.experience:
+        if not exp.start_date or not exp.end_date:
+            formatting_score -= 10
+            if "Inconsistent dates in experience section." not in issues:
+                issues.append("Inconsistent dates in experience section.")
         
-        category_scores = heuristic_scores
-        issues = _identify_ats_issues(resume, resume_text)
-        recommendations = _generate_recommendations(issues, heuristic_scores)
+        # Check for bullet point density (approximated by line breaks or dashes)
+        desc = exp.description or ""
+        bullets = desc.count('\n') + desc.count('•') + desc.count('- ')
+        if bullets < 2:
+            formatting_score -= 5
+            recommendations.append(f"Add more bullet points to your role at {exp.company} to detail your contributions.")
+
+    categories['formatting'] = max(0, formatting_score)
+
+    overall_heuristic_score = int(sum(categories.values()) / len(categories))
 
     return {
-        'overall_score': overall_score,
-        'category_scores': category_scores,
+        'score': overall_heuristic_score,
+        'categories': categories,
         'issues': issues,
-        'recommendations': recommendations,
-        'llm_powered': llm_analysis is not None,
-        'status': 'Complete'
+        'recommendations': recommendations
     }
 
 
 def _prepare_resume_text(resume: Resume) -> str:
     """Create a textual representation of the resume for analysis."""
+    # Build education details
+    edu_parts = []
+    for edu in resume.education:
+        edu_str = f"- {edu.degree}"
+        if edu.major: edu_str += f" in {edu.major}"
+        edu_str += f" from {edu.school}"
+        if edu.start_date or edu.end_date:
+            edu_str += f" ({edu.start_date or ''} - {edu.end_date or 'Present'})"
+        edu_parts.append(edu_str)
+
+    # Build experience details
+    exp_parts = []
+    for exp in resume.experience:
+        exp_str = f"- {exp.role} at {exp.company}"
+        if exp.start_date or exp.end_date:
+            exp_str += f" ({exp.start_date or ''} - {exp.end_date or 'Present'})"
+        if exp.description:
+            exp_str += f": {exp.description}"
+        exp_parts.append(exp_str)
+
+    # Build projects
+    proj_parts = []
+    for proj in resume.projects:
+        proj_str = f"- {proj.project_name}"
+        if proj.description:
+            proj_str += f": {proj.description}"
+        proj_parts.append(proj_str)
+
     return f"""
 NAME: {resume.full_name}
 EMAIL: {resume.email}
 PHONE: {resume.phone or 'N/A'}
 LINKEDIN: {resume.linkedin_url or 'N/A'}
+TITLE: {resume.title or 'N/A'}
+TARGET ROLE: {resume.target_role or 'N/A'}
 
 SUMMARY:
-{resume.title or ''}
-{resume.target_role or ''}
+{getattr(resume, 'summary', '') or 'N/A'}
 
 EDUCATION:
-{chr(10).join([f"- {edu.degree} from {edu.school} ({edu.major or ''})" for edu in resume.education]) or 'N/A'}
+{chr(10).join(edu_parts) or 'N/A'}
 
 EXPERIENCE:
-{chr(10).join([f"- {exp.role} at {exp.company} ({exp.start_date} - {exp.end_date or 'Present'}): {exp.description}" for exp in resume.experience]) or 'N/A'}
+{chr(10).join(exp_parts) or 'N/A'}
 
 PROJECTS:
-{chr(10).join([f"- {proj.project_name}: {proj.description}" for proj in resume.projects]) or 'N/A'}
+{chr(10).join(proj_parts) or 'N/A'}
 
 SKILLS:
 {', '.join([skill.name for skill in resume.skills]) or 'N/A'}
     """
 
 
-def _perform_llm_analysis(resume_text: str, target_role: str = "") -> Optional[Dict]:
-    """Perform deep analysis using LLM for maximum accuracy based on target role."""
+async def _perform_llm_analysis(resume_text: str, target_role: str = "", job_description: str = "") -> Optional[Dict]:
+    """Perform deep analysis using LLM for maximum accuracy based on target role and job description."""
     try:
         role_context = f"for the target role: {target_role}" if target_role else "for general professional standards"
+        jd_context = f"\n\nTARGET JOB DESCRIPTION:\n{job_description}" if job_description else ""
         
         prompt = f"""
-        Analyze the following resume {role_context} with 98% accuracy and professional depth.
-        Calculate an extremely precise and professional ATS score and provide high-quality, ORIGINAL, and SPECIFIC feedback.
+        You are a Senior ATS Architect and Career Optimization Strategist. 
+        Perform a rigorous, 100% data-driven analysis of the provided resume {role_context}.
+        {jd_context}
         
-        CRITICAL REQUIREMENTS:
-        1. Identify REAL ISSUES. Do NOT use generic or filler feedback.
-        2. Be EXTREMELY CRITICAL but professional. Look for:
-           - Missing high-value industry keywords relevant to the target role.
-           - Lack of quantifiable metrics (%, $, numbers) in experience.
-           - Weak or repetitive action verbs.
-           - Formatting issues: inconsistent dates, non-standard section headers.
-           - Structural problems: section ordering, contact info placement.
-           - Professional summary quality: is it impactful or generic?
-        3. For every issue, provide a SPECIFIC and ACTIONABLE recommendation tailored ONLY to this resume's content.
+        CRITICAL ANALYSIS PROTOCOL:
+        1. ATS PARSING SIMULATION: 
+           - Evaluate section header standardization.
+           - Check for complex formatting that breaks ATS (tables, icons, non-standard fonts).
+           - Assess keyword density for BOTH technical and domain-specific terms.
+        
+        2. CONTENT QUALITY & IMPACT:
+           - Analyze bullet points for the STAR/XYZ formula (Action, Context, Metric).
+           - Identify high-impact action verbs vs. passive language.
+           - Evaluate the Professional Summary: Is it a unique value proposition or generic filler?
+        
+        3. JOB MATCHING (If JD provided):
+           - Compare extracted skills vs. JD required skills.
+           - Check for years of experience match for specific technologies.
+           - Assess seniority level alignment.
+        
+        4. SKILL EXTRACTION:
+           - Extract and categorize skills: Hard Skills, Soft Skills, and Tools/Technologies.
+           - Identify "Implicit Skills" mentioned in experience descriptions.
         
         RESUME:
         {resume_text}
         
-        Return a structured JSON object with:
-        - overall_score (integer 0-100)
-        - keyword_optimization_score (integer 0-100)
-        - semantic_relevance_score (integer 0-100)
-        - industry_alignment_score (integer 0-100)
-        - issues (list of strings, be SPECIFIC - e.g., "The 'Senior Developer' role lacks quantifiable achievements like budget or team size")
-        - recommendations (list of strings, be ACTIONABLE - e.g., "Add a 'Technologies' sub-section to each project to highlight specific tools used")
-        - matched_keywords (list of strings)
-        - missing_keywords (list of strings)
+        Return a structured JSON object with EXACTLY these fields:
+        - overall_score: (0-100)
+        - keyword_optimization_score: (0-100)
+        - semantic_relevance_score: (0-100)
+        - industry_alignment_score: (0-100)
+        - formatting_score: (0-100)
+        - structure_score: (0-100)
+        - readability_score: (0-100)
+        - contact_info_score: (0-100)
+        - presence_score: (0-100) (Based on GitHub, Portfolio, LinkedIn presence and quality)
+        - issues: list of strings (Prioritize high-severity issues first)
+        - recommendations: list of strings (Actionable, specific improvements)
+        - skill_analysis: object with 'hard_skills', 'soft_skills', 'tools'
+        - keyword_gap: object with 'matched', 'missing' (priority), 'optional'
+        - industry_tips: list of strings (Industry-specific career advice)
+        - years_of_experience: float (Detected total relevant years)
         """
         
         schema = {
@@ -145,209 +321,45 @@ def _perform_llm_analysis(resume_text: str, target_role: str = "") -> Optional[D
                 "keyword_optimization_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 "semantic_relevance_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 "industry_alignment_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "formatting_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "structure_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "readability_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "contact_info_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "presence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 "issues": {"type": "array", "items": {"type": "string"}},
                 "recommendations": {"type": "array", "items": {"type": "string"}},
-                "matched_keywords": {"type": "array", "items": {"type": "string"}},
-                "missing_keywords": {"type": "array", "items": {"type": "string"}}
+                "skill_analysis": {
+                    "type": "object",
+                    "properties": {
+                        "hard_skills": {"type": "array", "items": {"type": "string"}},
+                        "soft_skills": {"type": "array", "items": {"type": "string"}},
+                        "tools": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["hard_skills", "soft_skills", "tools"]
+                },
+                "keyword_gap": {
+                    "type": "object",
+                    "properties": {
+                        "matched": {"type": "array", "items": {"type": "string"}},
+                        "missing": {"type": "array", "items": {"type": "string"}},
+                        "optional": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["matched", "missing", "optional"]
+                },
+                "industry_tips": {"type": "array", "items": {"type": "string"}},
+                "years_of_experience": {"type": "number"}
             },
-            "required": ["overall_score", "issues", "recommendations", "keyword_optimization_score", "semantic_relevance_score", "industry_alignment_score"]
+            "required": [
+                "overall_score", "issues", "recommendations", 
+                "keyword_optimization_score", "semantic_relevance_score", 
+                "industry_alignment_score", "formatting_score", "structure_score",
+                "readability_score", "contact_info_score", "skill_analysis", 
+                "keyword_gap", "industry_tips", "presence_score"
+            ]
         }
         
-        result = llm_service.generate_structured_output(prompt, schema)
+        result = await llm_service.generate_structured_output_async(prompt, schema)
         return result
     except Exception as e:
         logger.error(f"LLM ATS analysis failed: {e}")
         return None
-
-
-def _check_contact_info(resume: Resume) -> int:
-    """Check contact information completeness."""
-    score = 0
-    
-    if resume.email and '@' in resume.email:
-        score += 30
-    if resume.phone and len(resume.phone) >= 10:
-        score += 30
-    if resume.linkedin_url and 'linkedin' in resume.linkedin_url.lower():
-        score += 20
-    if resume.full_name and len(resume.full_name.split()) >= 2:
-        score += 20
-    
-    return min(score, 100)
-
-
-def _check_formatting_compatibility(text: str) -> int:
-    """Check for ATS-unfriendly formatting."""
-    score = 100
-    
-    problematic_patterns = [
-        (r'[^\x00-\x7F]', 2, "Special Unicode characters"),
-        (r'\b[A-Z]{2,}\b.*\b[A-Z]{2,}\b', 3, "Multiple all-caps"),
-        (r'[|◆●■►]', 2, "Special characters"),
-        (r'http[s]?://[^\s]+', 1, "URLs"),
-    ]
-    
-    for pattern, penalty, _ in problematic_patterns:
-        matches = len(re.findall(pattern, text))
-        score -= matches * penalty
-    
-    return max(score, 0)
-
-
-def _check_keyword_optimization(text: str) -> int:
-    """Check for high-value keywords using an expanded set."""
-    score = 0
-    
-    high_value_keywords = {
-        'technical': [
-            'Python', 'Java', 'JavaScript', 'SQL', 'AWS', 'Docker', 'React', 'Node.js', 
-            'Kubernetes', 'TypeScript', 'PostgreSQL', 'Redis', 'GraphQL', 'REST', 'API',
-            'CI/CD', 'Git', 'Machine Learning', 'AI', 'Cloud', 'Microservices'
-        ],
-        'soft': [
-            'Leadership', 'Communication', 'Project Management', 'Problem Solving',
-            'Teamwork', 'Agile', 'Scrum', 'Collaboration', 'Critical Thinking', 'Adaptability'
-        ],
-        'action_verbs': [
-            'increased', 'improved', 'reduced', 'achieved', 'delivered', 'percentage',
-            'managed', 'developed', 'implemented', 'designed', 'optimized', 'spearheaded',
-            'streamlined', 'launched', 'negotiated', 'resolved'
-        ]
-    }
-    
-    total_categories = len(high_value_keywords)
-    category_scores = []
-    
-    for category, keywords in high_value_keywords.items():
-        found = 0
-        for keyword in keywords:
-            if re.search(r'\b' + re.escape(keyword) + r'\b', text, re.IGNORECASE):
-                found += 1
-        
-        # Calculate percentage for this category (capped at 100)
-        # Expecting at least 40% of keywords for full score
-        cat_score = (found / (len(keywords) * 0.4)) * 100 if len(keywords) > 0 else 0
-        category_scores.append(min(cat_score, 100))
-    
-    score = int(sum(category_scores) / total_categories) if total_categories > 0 else 0
-    return min(score, 100)
-
-
-def _check_resume_structure(resume: Resume) -> int:
-    """Check for proper resume sections."""
-    score = 0
-    
-    if resume.full_name:
-        score += 20
-    if resume.email or resume.phone:
-        score += 15
-    if len(resume.education) > 0:
-        score += 20
-    if len(resume.experience) > 0:
-        score += 25
-    if len(resume.skills) > 0:
-        score += 20
-    
-    return min(score, 100)
-
-
-def _check_ats_readability(text: str) -> int:
-    """Check ATS readability."""
-    score = 100
-    
-    lines = text.split('\n')
-    empty_lines = sum(1 for line in lines if not line.strip())
-    
-    if len(lines) > 0:
-        empty_line_ratio = empty_lines / len(lines)
-        if empty_line_ratio > 0.3:
-            score -= 10
-    
-    words_count = len(text.split())
-    if words_count < 100:
-        score -= 15
-    elif words_count > 1000:
-        score -= 5
-    
-    return max(score, 0)
-
-
-def _identify_ats_issues(resume: Resume, resume_text: str) -> List[str]:
-    """Identify specific ATS issues using enhanced heuristics for 98% accuracy."""
-    issues = []
-    
-    # 1. Contact Info Issues
-    if not resume.email:
-        issues.append("Missing professional email address in the header")
-    if not resume.phone:
-        issues.append("Missing phone number; recruiters cannot reach you directly")
-    if not resume.linkedin_url:
-        issues.append("LinkedIn profile link is missing; essential for professional verification")
-    
-    # 2. Structural & Formatting Issues
-    if len(resume.education) == 0:
-        issues.append("No education history detected; add degrees and institutions")
-    if len(resume.experience) == 0:
-        issues.append("Work experience section is empty; critical for ATS ranking")
-    if len(resume.skills) < 10:
-        issues.append(f"Only {len(resume.skills)} skills found; aim for 10-15 industry-specific keywords")
-    
-    # 3. Content Quality Issues (Heuristic)
-    if not resume.title and not resume.target_role:
-        issues.append("Professional title or target role is missing from the resume")
-    
-    # Check for quantifiable metrics (extremely common ATS requirement)
-    if not re.search(r'\d+%', resume_text) and not re.search(r'\$\d+', resume_text) and not re.search(r'\d+\s*(?:million|thousand|users|clients)', resume_text, re.I):
-        issues.append("Lack of quantifiable achievements (%, $, or large numbers) in experience bullet points")
-    
-    # Check for strong action verbs
-    strong_verbs = ['orchestrated', 'spearheaded', 'pioneered', 'engineered', 'architected', 'optimized', 'streamlined', 'catalyzed']
-    found_strong = [v for v in strong_verbs if re.search(r'\b' + v + r'\b', resume_text.lower())]
-    if len(found_strong) < 2:
-        issues.append("Resume relies on weak passive language; use stronger action verbs like 'Architected' or 'Spearheaded'")
-
-    # 4. ATS Readability
-    if re.search(r'[^\x00-\x7F]', resume_text):
-        issues.append("Special characters or complex symbols detected; may cause parsing errors in older ATS")
-    
-    # Length check
-    words = resume_text.split()
-    if len(words) < 300:
-        issues.append("Resume content is too thin (under 300 words); add more detail to your roles")
-    elif len(words) > 1500:
-        issues.append("Resume is excessively long (over 1500 words); aim for 1-2 concise pages")
-
-    return list(set(issues))
-
-
-def _generate_recommendations(issues: List[str], scores: Dict) -> List[str]:
-    """Generate actionable, specific recommendations."""
-    recommendations = []
-    
-    # Map issues to specific recommendations
-    issue_map = {
-        "Missing professional email address": "Add a professional email (e.g., name.surname@email.com) to the header",
-        "Missing phone number": "Include a valid phone number with country code",
-        "LinkedIn profile": "Create and add a LinkedIn profile link to increase trust and visibility",
-        "Education section": "Add your highest degree, institution name, and graduation date",
-        "Work experience": "Detail your professional history with clear job titles and company names",
-        "skills found": "Add more technical and soft skills relevant to your target role",
-        "quantifiable achievements": "Use the X-Y-Z formula: 'Accomplished [X] as measured by [Y], by doing [Z]'",
-        "Weak action verbs": "Start each bullet point with a strong action verb (e.g., 'Engineered', 'Orchestrated')",
-        "Non-standard characters": "Stick to standard fonts and avoid complex graphics or unusual symbols"
-    }
-
-    for issue in issues:
-        for key, rec in issue_map.items():
-            if key in issue:
-                recommendations.append(f"✓ {rec}")
-                break
-    
-    # Add general best practices if list is short
-    if len(recommendations) < 3:
-        recommendations.append("✓ Tailor your resume summary to the specific job title you're applying for")
-        recommendations.append("✓ Use reverse-chronological order for your work experience")
-        recommendations.append("✓ Ensure your resume is no longer than 2 pages for maximum impact")
-
-    return list(set(recommendations))[:6]
-

@@ -45,10 +45,7 @@ source venv/bin/activate
 # On Windows:
 venv\Scripts\activate
 
-# Install minimal dependencies (for quick start)
-pip install -r requirements-minimal.txt
-
-# OR install all dependencies (for full AI features)
+# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -236,7 +233,6 @@ GrobsAI/
 │   │   └── main.py        # App entry point
 │   ├── .env.example
 │   ├── requirements.txt
-│   ├── requirements-minimal.txt
 │   └── setup.py
 │
 └── Frontend/
@@ -258,7 +254,7 @@ GrobsAI/
 
 ### Backend won't start
 - Make sure venv is activated
-- Check all required packages are installed: `pip install -r requirements-minimal.txt`
+- Check all required packages are installed: `pip install -r requirements.txt`
 - Verify `.env` exists with `SECRET_KEY` set
 
 ### Frontend shows "Failed to load"
@@ -300,29 +296,3 @@ For production:
 - SQLite database file: `Backend/grobs.db`
 - Uploaded resumes stored in: `Backend/uploads/`
 - API docs: http://localhost:8000/docs
-
-
-Current LLM Setup Analysis:
-
-✅ Currently Integrated Providers (all in Backend/app/services/llm_service.py):
-
-OpenAI (gpt-4o default, embeddings with text-embedding-3-small)
-Anthropic (Claude 3.5 Sonnet default)
-Google Gemini (gemini-1.5-flash default, default LLM_PROVIDER: "google")
-Implementation Details:
-
-Unified LLMService class with fallback chaining (OpenAI → Anthropic → Google → local heuristics)
-Supports text generation, structured JSON output, embeddings, streaming
-Config via .env: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY
-Dependencies: openai>=1.0.0, anthropic>=0.7.0, google-genai
-✅ Hugging Face Usage: Yes (Local Models, Not Cloud API)
-
-Embeddings: sentence-transformers/all-MiniLM-L6-v2 (default, via sentence_transformers)
-NER Parsing: dslim/bert-base-NER (resume parsing)
-Similarity Ranking: all-MiniLM-L6-v2 for cosine similarity
-Config: EMBEDDING_PROVIDER: "huggingface", EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
-Dependencies: sentence-transformers>=3.0.0, transformers>=4.36.2, torch>=2.1.2
-No HF Inference Endpoints (HUGGINGFACE_API_KEY present in config.py but unused)
-Can/Should We Add More LLM Providers? ✅ YES, Easily
-
-Groq	10x faster inference, same OpenAI-compatible API	Free tier	15 lines

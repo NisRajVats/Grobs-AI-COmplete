@@ -98,6 +98,8 @@ class InterviewAnswer(Base):
     strengths = Column(JSON, nullable=True)
     improvements = Column(JSON, nullable=True)
     suggested_improvements = Column(JSON, nullable=True)
+    tone_analysis = Column(Text, nullable=True)
+    filler_words_detected = Column(JSON, nullable=True)
     
     # Timing
     time_taken_seconds = Column(Integer, nullable=True)

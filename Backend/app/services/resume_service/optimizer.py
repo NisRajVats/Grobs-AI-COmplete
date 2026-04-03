@@ -1,349 +1,637 @@
 """
-Resume optimization service for AI-powered resume improvements.
+Advanced Resume Optimization Service
+────────────────────────────────────
+AI-powered resume transformation engine with:
+  • Job-specific tailoring & ATS optimization
+  • Keyword injection & gap analysis
+  • Versioning, rollback, and audit trail
+  • Retry/back-off for LLM calls
+  • Rich structured output with metrics
 """
+
+from __future__ import annotations
+
 import json
 import logging
-from typing import Dict, List, Optional, Any
-from sqlalchemy.orm import Session
+import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from app.models import Resume, ResumeVersion, ResumeAnalysis, Job
-from rapidfuzz import fuzz
+from sqlalchemy.orm import Session
+
+from app.models import Job, Resume, ResumeAnalysis, ResumeVersion
 from app.services.llm_service import llm_service
 from app.services.resume_service.resume_manager import ResumeManager
-from .parser import clean_text, clean_experience_entry  # Reuse parser utils
+from .parser import clean_experience_entry, clean_text
 
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────
+# Enums & Constants
+# ──────────────────────────────────────────────
+
+class OptimizationType(str, Enum):
+    COMPREHENSIVE = "comprehensive"
+    JOB_TAILORED  = "job_tailored"
+    ATS_BOOST     = "ats_boost"
+    TONE_POLISH   = "tone_polish"
+
+
+class SeniorityLevel(str, Enum):
+    INTERN     = "intern"
+    JUNIOR     = "junior"
+    MID        = "mid"
+    SENIOR     = "senior"
+    LEAD       = "lead"
+    EXECUTIVE  = "executive"
+
+
+_SENIORITY_KEYWORDS: Dict[SeniorityLevel, List[str]] = {
+    SeniorityLevel.INTERN:    ["assisted", "supported", "learned", "contributed"],
+    SeniorityLevel.JUNIOR:    ["developed", "implemented", "built", "collaborated"],
+    SeniorityLevel.MID:       ["designed", "optimized", "led", "delivered"],
+    SeniorityLevel.SENIOR:    ["architected", "spearheaded", "drove", "mentored"],
+    SeniorityLevel.LEAD:      ["directed", "established", "transformed", "owned"],
+    SeniorityLevel.EXECUTIVE: ["visioned", "championed", "scaled", "redefined"],
+}
+
+_MAX_LLM_RETRIES   = 3
+_LLM_RETRY_DELAY   = 1.5   # seconds (exponential back-off base)
+_MAX_EXPERIENCE_ROLES = 4   # focus on latest N roles
+
+
+# ──────────────────────────────────────────────
+# Data containers
+# ──────────────────────────────────────────────
+
+@dataclass
+class OptimizationContext:
+    """Immutable context bundle passed through the pipeline."""
+    resume_id:         int
+    user_id:           int
+    optimization_type: OptimizationType = OptimizationType.COMPREHENSIVE
+    job_description:   str              = ""
+    job_id:            Optional[int]    = None
+    save_as_new:       bool             = False
+    target_seniority:  Optional[SeniorityLevel] = None
+
+
+@dataclass
+class OptimizationResult:
+    """Structured result returned to callers."""
+    success:                   bool
+    resume_id:                 int
+    original_resume:           Dict[str, Any]    = field(default_factory=dict)
+    optimized_resume:          Dict[str, Any]    = field(default_factory=dict)
+    suggestions:               str               = ""
+    improvements:              List[str]         = field(default_factory=list)
+    ats_score:                 int               = 0
+    compatibility_score:       int               = 0
+    compatibility_feedback:    str               = ""
+    skill_gap:                 List[str]         = field(default_factory=list)
+    matching_skills:           List[str]         = field(default_factory=list)
+    skill_recommendations:     List[str]         = field(default_factory=list)
+    certificate_recommendations: List[str]       = field(default_factory=list)
+    error:                     Optional[str]     = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if v is not None}
+
+
+# ──────────────────────────────────────────────
+# Core Service
+# ──────────────────────────────────────────────
+
 class ResumeOptimizer:
-    """AI-powered resume optimization service."""
-    
-    def __init__(self, db: Session):
-        self.db = db
+    """
+    AI-powered resume optimization pipeline.
+
+    Responsibilities
+    ----------------
+    1. Resolve context  – fetch resume + optional job description
+    2. Prepare payload  – serialise resume to LLM-friendly dict
+    3. Optimize         – call LLM with structured schema + retry logic
+    4. Post-process     – clean artifacts, validate completeness
+    5. Persist          – create version record + analysis log
+    6. Return           – typed OptimizationResult
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.db             = db
         self.resume_manager = ResumeManager(db)
-    
-    def optimize_resume(
+
+    # ─── Public API ────────────────────────────
+
+    async def optimize_resume(
         self,
-        resume_id: int,
-        user_id: int,
-        optimization_type: str = "comprehensive",
-        job_description: str = "",
-        job_id: Optional[int] = None,
-        save_as_new: bool = False
+        resume_id:         int,
+        user_id:           int,
+        optimization_type: str           = OptimizationType.COMPREHENSIVE,
+        job_description:   str           = "",
+        job_id:            Optional[int] = None,
+        save_as_new:       bool          = False,
+        target_seniority:  Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Optimize a resume using AI for language, tone, ATS score, and grammar.
+        Entry point for resume optimization.
+        Returns a dict-serialised OptimizationResult.
         """
-        # Ensure latest API keys from .env are loaded
+        # Validate optimization type
+        valid_types = [t.value for t in OptimizationType]
+        if optimization_type not in valid_types:
+            logger.warning(f"Invalid optimization type: {optimization_type}. Using comprehensive.")
+            optimization_type = OptimizationType.COMPREHENSIVE.value
+        
         llm_service.refresh_config()
-        
-        # If job_id is provided, fetch job description
-        if job_id and not job_description:
-            job = self.db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job_description = job.job_description or ""
-                logger.info(f"Fetched job description from job_id {job_id}")
-        
-        # Get resume using manager to ensure decryption of sensitive fields
-        resume = self.resume_manager.get_resume(resume_id, user_id)
+
+        try:
+            opt_type = OptimizationType(optimization_type)
+        except ValueError:
+            opt_type = OptimizationType.COMPREHENSIVE
+
+        ctx = OptimizationContext(
+            resume_id         = resume_id,
+            user_id           = user_id,
+            optimization_type = opt_type,
+            job_description   = job_description or "",
+            job_id            = job_id,
+            save_as_new       = save_as_new,
+            target_seniority  = SeniorityLevel(target_seniority) if target_seniority else None,
+        )
+
+        try:
+            result = await self._run_pipeline(ctx)
+        except ValueError as exc:
+            logger.warning("Optimization rejected: %s", exc)
+            return OptimizationResult(success=False, resume_id=resume_id, error=str(exc)).to_dict()
+        except Exception as exc:
+            logger.exception("Unexpected error optimizing resume %d", resume_id)
+            return OptimizationResult(success=False, resume_id=resume_id, error="Internal error during optimization").to_dict()
+
+        return result.to_dict()
+
+    # ─── Pipeline ──────────────────────────────
+
+    async def _run_pipeline(self, ctx: OptimizationContext) -> OptimizationResult:
+        # 1. Resolve context
+        resume, ctx = await self._resolve_context(ctx)
+
+        # 2. Prepare payload
+        resume_data = self._serialize_resume(resume)
+
+        # 3. Optimize (with retry)
+        llm_output = await self._optimize_with_retry(resume_data, ctx)
+        if not llm_output:
+            raise ValueError("LLM returned no usable output after retries")
+
+        # 4. Post-process
+        optimized_resume = self._post_process(llm_output["optimized_resume"])
+
+        # 5. Persist
+        target_id = await self._persist(resume, ctx, optimized_resume, llm_output)
+
+        # 6. Build & return result
+        manager_ready = self._to_manager_format(optimized_resume)
+        return OptimizationResult(
+            success                    = True,
+            resume_id                  = target_id,
+            original_resume            = resume_data,
+            optimized_resume           = manager_ready,
+            suggestions                = llm_output.get("optimization_summary", ""),
+            improvements               = llm_output.get("improvements_made", []),
+            ats_score                  = llm_output.get("projected_ats_score", 0),
+            compatibility_score        = llm_output.get("compatibility_score", 0),
+            compatibility_feedback     = llm_output.get("compatibility_feedback", ""),
+            skill_gap                  = llm_output.get("skill_gap", []),
+            matching_skills            = llm_output.get("matching_skills", []),
+            skill_recommendations      = llm_output.get("skill_recommendations", []),
+            certificate_recommendations= llm_output.get("certificate_recommendations", []),
+        )
+
+    # ─── Step 1: Resolve context ───────────────
+
+    async def _resolve_context(
+        self, ctx: OptimizationContext
+    ) -> tuple[Resume, OptimizationContext]:
+        """Fetch resume and optionally enrich job description from DB."""
+        if ctx.job_id and not ctx.job_description:
+            job = self.db.query(Job).filter(Job.id == ctx.job_id).first()
+            if job and job.job_description:
+                ctx = OptimizationContext(**{**ctx.__dict__, "job_description": job.job_description})
+                logger.info("Enriched context with job_id=%d description", ctx.job_id)
+
+        resume = self.resume_manager.get_resume(ctx.resume_id, ctx.user_id)
         if not resume:
-            raise ValueError("Resume not found or access denied")
-        
-        # Prepare data for LLM
-        resume_data = self._prepare_resume_data_for_llm(resume)
-        
-        # Perform deep optimization using LLM
-        optimized_result = self._perform_deep_optimization(resume_data, optimization_type, job_description)
-        
-        if not optimized_result or "optimized_resume" not in optimized_result:
-            error_msg = optimized_result.get("error") if optimized_result else "AI service returned no result"
-            logger.error(f"Optimization failed for resume {resume_id}: {error_msg}")
-            return {"success": False, "error": f"AI optimization failed: {error_msg}"}
+            raise ValueError(f"Resume {ctx.resume_id} not found or access denied for user {ctx.user_id}")
 
-        # Post-process LLM output to clean artifacts
-        optimized_resume = optimized_result["optimized_resume"]
-        
-        # Clean experience descriptions
-        if "experience" in optimized_resume:
-            optimized_resume["experience"] = [
-                clean_experience_entry(exp) for exp in optimized_resume["experience"]
-            ]
-        
-        # Clean summary
-        if "summary" in optimized_resume:
-            optimized_resume["summary"] = clean_text(optimized_resume["summary"])
-        
-        # Clean other text fields
-        for field in ["title", "target_role"]:
-            if field in optimized_resume and optimized_resume[field]:
-                optimized_resume[field] = clean_text(optimized_resume[field])
+        return resume, ctx
 
-        # Prepare data for update
-        optimized_resume_data = optimized_resume
-        
-        # Convert skills from list of strings to list of dicts with 'name' for the manager
-        manager_data = optimized_resume_data.copy()
-        if "skills" in manager_data and isinstance(manager_data["skills"], list):
-            manager_data["skills"] = [{"name": s} for s in manager_data["skills"]]
+    # ─── Step 2: Serialize resume ──────────────
 
-        target_resume_id = resume_id
-        
-        if save_as_new:
-            # Create a new resume record instead of updating
-            new_title = f"{resume.title or 'Resume'} (Tailored)"
-            if job_description:
-                new_title = f"{resume.title or 'Resume'} - {datetime.now().strftime('%b %d')}"
-            
-            new_resume = self.resume_manager.create_resume(
-                user=resume.user,
-                resume_data={
-                    **manager_data,
-                    "title": new_title,
-                    "target_role": manager_data.get("target_role", resume.target_role)
-                }
-            )
-            target_resume_id = new_resume.id
-            # Copy file URL if exists
-            if resume.resume_file_url:
-                new_resume.resume_file_url = resume.resume_file_url
-                self.db.commit()
-        else:
-            # DO NOT update main resume immediately during optimization to allow review
-            # Create new optimized version in DB for tracking
-            version = self._create_optimized_version(resume, optimized_result, job_description)
-        
-        # ATS SCORE FOR PREVIEW
-        final_ats_score = optimized_result.get("projected_ats_score", 0)
-        
-        return {
-            "success": True,
-            "resume_id": target_resume_id,
-            "suggestions": optimized_result.get("optimization_summary", ""),
-            "improvements": optimized_result.get("improvements_made", []),
-            "ats_score": final_ats_score,
-            "original_resume": resume_data,
-            "optimized_resume": manager_data,
-            "compatibility_score": optimized_result.get("compatibility_score", 0),
-            "compatibility_feedback": optimized_result.get("compatibility_feedback", ""),
-            "skill_gap": optimized_result.get("skill_gap", []),
-            "matching_skills": optimized_result.get("matching_skills", []),
-            "skill_recommendations": optimized_result.get("skill_recommendations", []),
-            "certificate_recommendations": optimized_result.get("certificate_recommendations", [])
-        }
-
-    def _prepare_resume_data_for_llm(self, resume: Resume) -> Dict[str, Any]:
-        """Convert resume model to a structured dict for LLM processing."""
-        # Extract summary from parsed_data if available
+    def _serialize_resume(self, resume: Resume) -> Dict[str, Any]:
+        """Convert ORM model → clean dict for LLM consumption."""
         summary = ""
         if resume.parsed_data:
             try:
-                pd = json.loads(resume.parsed_data)
-                summary = pd.get("summary", "")
-            except:
-                pass
+                summary = json.loads(resume.parsed_data).get("summary", "")
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse resume.parsed_data for resume %d", resume.id)
+
+        # Cap experience to latest N roles to keep prompt focused
+        sorted_experience = sorted(
+            resume.experience,
+            key=lambda e: e.start_date or "",
+            reverse=True,
+        )[:_MAX_EXPERIENCE_ROLES]
 
         return {
-            "full_name": resume.full_name,
-            "title": resume.title,
-            "summary": summary,
+            "full_name":   resume.full_name,
+            "title":       resume.title,
+            "summary":     summary,
             "target_role": resume.target_role,
             "education": [
                 {
-                    "school": e.school, "degree": e.degree, "major": e.major, 
-                    "start_date": e.start_date, "end_date": e.end_date, "description": e.description
-                } for e in resume.education
+                    "school":     e.school,
+                    "degree":     e.degree,
+                    "major":      e.major,
+                    "start_date": e.start_date,
+                    "end_date":   e.end_date,
+                    "description":e.description,
+                }
+                for e in resume.education
             ],
             "experience": [
                 {
-                    "company": e.company, "role": e.role, "location": e.location,
-                    "start_date": e.start_date, "end_date": e.end_date, "current": e.current,
-                    "description": e.description
-                } for e in resume.experience
+                    "company":    e.company,
+                    "role":       e.role,
+                    "location":   e.location,
+                    "start_date": e.start_date,
+                    "end_date":   e.end_date,
+                    "current":    e.current,
+                    "description":e.description,
+                }
+                for e in sorted_experience
             ],
             "projects": [
                 {
-                    "project_name": p.project_name, "description": p.description, 
-                    "technologies": p.technologies
-                } for p in resume.projects
+                    "project_name": p.project_name,
+                    "description":  p.description,
+                    "technologies": p.technologies,
+                }
+                for p in resume.projects
             ],
-            "skills": [s.name for s in resume.skills]
+            "skills": [s.name for s in resume.skills],
         }
 
-    def _perform_deep_optimization(self, resume_data: Dict[str, Any], opt_type: str, job_desc: str) -> Optional[Dict]:
-        """Use LLM to perform actual optimization of content for 98% ATS accuracy."""
-        try:
-            if job_desc:
-                mode_instruction = f"MODE: JOB-SPECIFIC TAILORING\n" \
-                                   f"TARGET JOB DESCRIPTION:\n{job_desc}\n\n" \
-                                   f"GOALS:\n" \
-                                   f"1. Align every section with the JD's core requirements.\n" \
-                                   f"2. Incorporate missing keywords from the JD naturally but prominently.\n" \
-                                   f"3. Highlight most relevant experience for this specific role.\n" \
-                                   f"4. Adapt the professional summary to speak directly to the job's needs."
-            else:
-                mode_instruction = f"MODE: GENERAL ATS SCORE OPTIMIZATION & PROFESSIONAL EXCELLENCE\n\n" \
-                                   f"GOALS:\n" \
-                                   f"1. Fix all formatting and structural issues identified in ATS analysis.\n" \
-                                   f"2. Replace passive language with high-impact, industry-leading action verbs (e.g., 'Spearheaded', 'Engineered', 'Orchestrated').\n" \
-                                   f"3. Quantify every possible achievement using hard metrics (%, $, scale, impact).\n" \
-                                   f"4. Enhance the Professional Summary to be impactful, keyword-dense, and highly professional for the target role: {resume_data.get('target_role', 'Professional')}.\n" \
-                                   f"5. Improve the clarity, tone, and professional language across all sections.\n" \
-                                   f"6. Ensure 100% ATS readability and structural integrity."
+    # ─── Step 3: LLM call with retry ──────────
 
-            prompt = f"You are a world-class Resume Optimizer and ATS Algorithm Expert.\n" \
-                     f"Your task is to rewrite the provided resume data to achieve a 98%+ ATS compatibility score and professional perfection.\n\n" \
-                     f"{mode_instruction}\n\n" \
-                     f"STRICT PRINCIPLES:\n" \
-                     f"- DO NOT use generic filler text or buzzwords without context. Be specific and high-impact.\n" \
-                     f"- Maintain 100% truthfulness; do not invent new roles or degrees, but you MAY rephrase existing descriptions to be more impressive and metric-focused.\n" \
-                     f"- Focus on making the resume 'machine-readable' (ATS) and 'recruiter-ready' (Human).\n" \
-                     f"- Every bullet point should follow the STAR (Situation, Task, Action, Result) or Google's X-Y-Z formula.\n\n" \
-                     f"RESUME DATA:\n" \
-                     f"{json.dumps(resume_data, indent=2)}\n\n" \
-                     f"Return a structured JSON object with:\n" \
-                     f"- optimized_resume: (Object matching input structure with improved content - ensure EVERY field is present)\n" \
-                     f"- optimization_summary: (Comprehensive string summarizing exactly what technical improvements were made and why)\n" \
-                     f"- improvements_made: (List of 5-8 specific, high-value enhancements - e.g., 'Transformed passive responsibilities into metric-driven achievements for the Senior Dev role')\n" \
-                     f"- projected_ats_score: (Integer 90-100 indicating the NEW improved score)\n" \
-                     f"- compatibility_score: (Integer 0-100 for JD match; or 0 if no JD)\n" \
-                     f"- compatibility_feedback: (Specific, actionable feedback on how this optimization improved matching)\n" \
-                     f"- skill_gap: (List of key industry skills still missing that the candidate should consider adding)\n" \
-                     f"- matching_skills: (List of high-impact skills now prominently featured)\n" \
-                     f"- skill_recommendations: (List of specific technical skills to learn for this career path)\n" \
-                     f"- certificate_recommendations: (List of high-value certifications to increase market value)"
-            
-            schema = {
-                "type": "object",
-                "properties": {
-                    "optimized_resume": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "target_role": {"type": "string"},
-                            "summary": {"type": "string"},
-                            "education": {"type": "array", "items": {"type": "object"}},
-                            "experience": {"type": "array", "items": {"type": "object"}},
-                            "projects": {"type": "array", "items": {"type": "object"}},
-                            "skills": {"type": "array", "items": {"type": "string"}}
-                        }
-                    },
-                    "optimization_summary": {"type": "string"},
-                    "improvements_made": {"type": "array", "items": {"type": "string"}},
-                    "projected_ats_score": {"type": "integer"},
-                    "compatibility_score": {"type": "integer"},
-                    "compatibility_feedback": {"type": "string"},
-                    "skill_gap": {"type": "array", "items": {"type": "string"}},
-                    "matching_skills": {"type": "array", "items": {"type": "string"}},
-                    "skill_recommendations": {"type": "array", "items": {"type": "string"}},
-                    "certificate_recommendations": {"type": "array", "items": {"type": "string"}}
-                },
-                "required": ["optimized_resume", "optimization_summary", "improvements_made", "projected_ats_score"]
-            }
-            
-            return llm_service.generate_structured_output(prompt, schema)
-        except Exception as e:
-            logger.error(f"Deep optimization failed: {e}")
-            return None
+    async def _optimize_with_retry(
+        self, resume_data: Dict[str, Any], ctx: OptimizationContext
+    ) -> Optional[Dict[str, Any]]:
+        """Call LLM with exponential back-off and structured schema enforcement."""
+        prompt = self._build_prompt(resume_data, ctx)
+        schema = self._build_response_schema()
 
-    def _create_optimized_version(self, resume: Resume, result: Dict[str, Any], job_desc: str = "") -> ResumeVersion:
-        """Create and save the optimized version in the database."""
-        # Get latest version number
+        for attempt in range(1, _MAX_LLM_RETRIES + 1):
+            try:
+                result = await llm_service.generate_structured_output_async(prompt, schema)
+                if result and "optimized_resume" in result:
+                    logger.info(
+                        "LLM optimization succeeded on attempt %d for resume %d",
+                        attempt, ctx.resume_id,
+                    )
+                    return result
+
+                logger.warning(
+                    "Attempt %d/%d: LLM returned incomplete output for resume %d",
+                    attempt, _MAX_LLM_RETRIES, ctx.resume_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Attempt %d/%d: LLM call failed for resume %d – %s",
+                    attempt, _MAX_LLM_RETRIES, ctx.resume_id, exc,
+                )
+
+            if attempt < _MAX_LLM_RETRIES:
+                await asyncio.sleep(_LLM_RETRY_DELAY * (2 ** (attempt - 1)))
+
+        return None
+
+    # ─── Step 4: Post-process ─────────────────
+
+    def _post_process(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Clean LLM artifacts and validate structural completeness."""
+        processed = dict(raw)
+
+        # Clean text fields
+        for field_name in ("title", "target_role", "summary"):
+            if processed.get(field_name):
+                processed[field_name] = clean_text(processed[field_name])
+
+        # Clean experience descriptions
+        if "experience" in processed:
+            processed["experience"] = [
+                clean_experience_entry(exp) for exp in processed["experience"]
+            ]
+
+        # Sanitize skills — ensure list of strings, deduplicate, sort
+        if "skills" in processed and isinstance(processed["skills"], list):
+            seen = set()
+            cleaned_skills = []
+            for s in processed["skills"]:
+                name = (s.get("name") if isinstance(s, dict) else str(s)).strip()
+                if name and name.lower() not in seen:
+                    seen.add(name.lower())
+                    cleaned_skills.append(name)
+            processed["skills"] = sorted(cleaned_skills, key=str.lower)
+
+        return processed
+
+    # ─── Step 5: Persist ──────────────────────
+
+    async def _persist(
+        self,
+        resume:          Resume,
+        ctx:             OptimizationContext,
+        optimized_resume:Dict[str, Any],
+        llm_output:      Dict[str, Any],
+    ) -> int:
+        """Save version record + analysis log; return target resume id."""
+        if ctx.save_as_new:
+            return self._create_new_resume(resume, ctx, optimized_resume)
+        else:
+            self._create_version_and_analysis(resume, optimized_resume, llm_output, ctx.job_description)
+            return resume.id
+
+    def _create_new_resume(
+        self,
+        source_resume:   Resume,
+        ctx:             OptimizationContext,
+        optimized_data:  Dict[str, Any],
+    ) -> int:
+        label = datetime.now().strftime("%b %d")
+        new_title = (
+            f"{source_resume.title or 'Resume'} – Tailored {label}"
+            if ctx.job_description
+            else f"{source_resume.title or 'Resume'} (Optimized)"
+        )
+
+        manager_data = self._to_manager_format(optimized_data)
+        new_resume = self.resume_manager.create_resume(
+            user=source_resume.user,
+            resume_data={
+                **manager_data,
+                "title":       new_title,
+                "target_role": manager_data.get("target_role", source_resume.target_role),
+            },
+        )
+
+        # Carry over file attachment if present
+        if source_resume.resume_file_url:
+            new_resume.resume_file_url = source_resume.resume_file_url
+            self.db.commit()
+
+        logger.info("Created new tailored resume id=%d from source id=%d", new_resume.id, source_resume.id)
+        return new_resume.id
+
+    def _create_version_and_analysis(
+        self,
+        resume:          Resume,
+        optimized_data:  Dict[str, Any],
+        llm_output:      Dict[str, Any],
+        job_description: str,
+    ) -> None:
         version_number = len(resume.versions) + 1
-        
+        now = datetime.utcnow()
+
         version = ResumeVersion(
-            resume_id=resume.id,
-            version_number=version_number,
-            version_label=f"AI Optimized ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
-            optimized_flag=True,
-            parsed_data=json.dumps(result["optimized_resume"]),
-            ats_score=result["projected_ats_score"],
-            created_at=datetime.utcnow()
+            resume_id      = resume.id,
+            version_number = version_number,
+            version_label  = f"AI Optimized · {now.strftime('%Y-%m-%d %H:%M')}",
+            optimized_flag = True,
+            parsed_data    = json.dumps(optimized_data),
+            ats_score      = llm_output.get("projected_ats_score", 0),
+            created_at     = now,
         )
-        
-        self.db.add(version)
-        
-        # Also log the optimization in analyses
+
         analysis = ResumeAnalysis(
-            resume_id=resume.id,
-            analysis_type="optimization",
-            score=result["projected_ats_score"],
-            feedback=json.dumps({
-                "summary": result["optimization_summary"],
-                "improvements": result["improvements_made"],
-                "compatibility_score": result.get("compatibility_score", 0),
-                "compatibility_feedback": result.get("compatibility_feedback", "")
+            resume_id       = resume.id,
+            analysis_type   = "optimization",
+            score           = llm_output.get("projected_ats_score", 0),
+            feedback        = json.dumps({
+                "summary":               llm_output.get("optimization_summary", ""),
+                "improvements":          llm_output.get("improvements_made", []),
+                "compatibility_score":   llm_output.get("compatibility_score", 0),
+                "compatibility_feedback":llm_output.get("compatibility_feedback", ""),
+                "skill_gap":             llm_output.get("skill_gap", []),
+                "matching_skills":       llm_output.get("matching_skills", []),
             }),
-            job_description=job_desc,
-            created_at=datetime.utcnow()
+            job_description = job_description,
+            created_at      = now,
         )
-        self.db.add(analysis)
-        
+
+        self.db.add_all([version, analysis])
         self.db.commit()
-        self.db.refresh(version)
-        return version
-    
-    def _build_resume_text(self, resume: Resume) -> str:
-        """Build text representation of resume for optimization."""
-        sections = []
-        
-        # Contact info
-        if resume.full_name:
-            sections.append(f"Name: {resume.full_name}")
-        if resume.email:
-            sections.append(f"Email: {resume.email}")
-        if resume.phone:
-            sections.append(f"Phone: {resume.phone}")
-        if resume.linkedin_url:
-            sections.append(f"LinkedIn: {resume.linkedin_url}")
-        
-        # Summary
-        if resume.title or resume.target_role:
-            sections.append(f"Title: {resume.title or resume.target_role}")
-        
-        # Education
+        logger.info("Persisted version #%d and analysis for resume id=%d", version_number, resume.id)
+
+    # ─── Prompt builder ───────────────────────
+
+    def _build_prompt(self, resume_data: Dict[str, Any], ctx: OptimizationContext) -> str:
+        seniority_hint = ""
+        if ctx.target_seniority:
+            power_verbs = ", ".join(_SENIORITY_KEYWORDS[ctx.target_seniority])
+            seniority_hint = (
+                f"\nSENIORITY TARGET: {ctx.target_seniority.value.upper()}\n"
+                f"Preferred action verbs for this level: {power_verbs}.\n"
+            )
+
+        if ctx.job_description:
+            mode_block = (
+                "═══ MODE: JOB-SPECIFIC TAILORING (MAX PRECISION) ═══\n"
+                f"TARGET JOB DESCRIPTION:\n{ctx.job_description}\n\n"
+                "GOALS:\n"
+                "1. ALIGNMENT     – Re-engineer every bullet to speak directly to JD requirements.\n"
+                "2. KEYWORD INJECTION – Naturally embed the top 12–15 mission-critical keywords.\n"
+                "3. IMPACT QUANTIFICATION – Use the XYZ formula: 'Accomplished [X] measured by [Y], by doing [Z]'.\n"
+                "4. SENIORITY MATCH – Align tone and responsibilities to the seniority expected in the JD.\n"
+                "5. GAP BRIDGING – Surface transferable skills that bridge any visible experience gaps.\n"
+            )
+        else:
+            target = resume_data.get("target_role", "Professional")
+            mode_block = (
+                "═══ MODE: UNIVERSAL ATS EXCELLENCE & PROFESSIONAL BRANDING ═══\n\n"
+                "GOALS:\n"
+                "1. ATS READABILITY   – Standard section headers; zero fancy formatting.\n"
+                "2. VERB DYNAMISM     – Replace generic verbs with high-octane action verbs.\n"
+                "3. METRIC INJECTION  – Add numbers, percentages, or dollar figures to every role.\n"
+                f"4. VALUE PROPOSITION – Rewrite summary as a keyword-dense elevator pitch for: {target}.\n"
+                "5. BREVITY           – Remove fluff; every word must earn its place.\n"
+            )
+
+        compliance = (
+            "COMPLIANCE RULES:\n"
+            "• Return 'optimized_resume' with the EXACT SAME structure as the input JSON.\n"
+            "• Focus on the latest 3–4 roles; make them the most detailed.\n"
+            "• NEVER fabricate titles, dates, companies, or degrees.\n"
+            "• Use standard bullet points (–). Avoid Markdown bold/italic inside text fields.\n"
+            "• All dates must remain in their original format.\n"
+        )
+
+        return (
+            "You are the world's most advanced Resume Optimization AI — "
+            "a hybrid of a Stanford-trained NLP engineer and a Fortune 500 talent partner.\n"
+            "Your mission: transform the resume below into a 99th-percentile document.\n\n"
+            f"{mode_block}\n"
+            f"{seniority_hint}\n"
+            f"{compliance}\n"
+            f"RESUME JSON:\n{json.dumps(resume_data, indent=2)}\n\n"
+            "Respond ONLY with a valid JSON object matching the specified schema. No prose outside JSON."
+        )
+
+    # ─── Response schema ──────────────────────
+
+    @staticmethod
+    def _build_response_schema() -> Dict[str, Any]:
+        experience_item = {
+            "type": "object",
+            "properties": {
+                "company":     {"type": "string"},
+                "role":        {"type": "string"},
+                "location":    {"type": "string"},
+                "start_date":  {"type": "string"},
+                "end_date":    {"type": "string"},
+                "current":     {"type": "boolean"},
+                "description": {"type": "string"},
+            },
+        }
+        education_item = {
+            "type": "object",
+            "properties": {
+                "school":      {"type": "string"},
+                "degree":      {"type": "string"},
+                "major":       {"type": "string"},
+                "start_date":  {"type": "string"},
+                "end_date":    {"type": "string"},
+                "description": {"type": "string"},
+            },
+        }
+        project_item = {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string"},
+                "description":  {"type": "string"},
+                "technologies": {"type": "string"},
+            },
+        }
+        return {
+            "type": "object",
+            "required": ["optimized_resume", "optimization_summary", "improvements_made", "projected_ats_score"],
+            "properties": {
+                "optimized_resume": {
+                    "type": "object",
+                    "required": ["title", "summary", "experience", "skills"],
+                    "properties": {
+                        "title":       {"type": "string"},
+                        "target_role": {"type": "string"},
+                        "summary":     {"type": "string"},
+                        "education":   {"type": "array", "items": education_item},
+                        "experience":  {"type": "array", "items": experience_item},
+                        "projects":    {"type": "array", "items": project_item},
+                        "skills":      {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                "optimization_summary":        {"type": "string"},
+                "improvements_made":           {"type": "array",  "items": {"type": "string"}, "minItems": 3, "maxItems": 10},
+                "projected_ats_score":         {"type": "integer", "minimum": 0,  "maximum": 100},
+                "compatibility_score":         {"type": "integer", "minimum": 0,  "maximum": 100},
+                "compatibility_feedback":      {"type": "string"},
+                "skill_gap":                   {"type": "array",  "items": {"type": "string"}},
+                "matching_skills":             {"type": "array",  "items": {"type": "string"}},
+                "skill_recommendations":       {"type": "array",  "items": {"type": "string"}, "maxItems": 5},
+                "certificate_recommendations": {"type": "array",  "items": {"type": "string"}, "maxItems": 3},
+            },
+        }
+
+    # ─── Helpers ──────────────────────────────
+
+    @staticmethod
+    def _to_manager_format(resume_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert LLM skills list[str] → list[dict] expected by ResumeManager."""
+        data = resume_data.copy()
+        if "skills" in data and isinstance(data["skills"], list):
+            data["skills"] = [
+                {"name": s} if isinstance(s, str) else s
+                for s in data["skills"]
+            ]
+        return data
+
+    def build_resume_text(self, resume: Resume) -> str:
+        """
+        Plain-text representation of a resume (useful for keyword extraction,
+        diff-views, and non-LLM ATS scanners).
+        """
+        lines: List[str] = []
+
+        def _add(label: str, value: Optional[str]) -> None:
+            if value:
+                lines.append(f"{label}: {value}")
+
+        _add("Name",     resume.full_name)
+        _add("Email",    resume.email)
+        _add("Phone",    resume.phone)
+        _add("LinkedIn", resume.linkedin_url)
+        _add("Title",    resume.title or resume.target_role)
+
         if resume.education:
-            sections.append("EDUCATION:")
-            for edu in resume.education:
-                edu_text = f"- {edu.degree} from {edu.school}"
-                if edu.major:
-                    edu_text += f", Major: {edu.major}"
-                if edu.gpa:
-                    edu_text += f", GPA: {edu.gpa}"
-                sections.append(edu_text)
-        
-        # Experience
+            lines.append("\nEDUCATION")
+            for e in resume.education:
+                parts = [f"{e.degree} — {e.school}"]
+                if e.major:      parts.append(f"Major: {e.major}")
+                if e.gpa:        parts.append(f"GPA: {e.gpa}")
+                date_range = _format_date_range(e.start_date, e.end_date)
+                if date_range:   parts.append(date_range)
+                lines.append("  • " + " | ".join(parts))
+                if e.description:
+                    lines.append(f"    {e.description}")
+
         if resume.experience:
-            sections.append("EXPERIENCE:")
-            for exp in resume.experience:
-                exp_text = f"- {exp.role} at {exp.company}"
-                if exp.location:
-                    exp_text += f", {exp.location}"
-                if exp.start_date:
-                    exp_text += f" ({exp.start_date}"
-                    if exp.end_date:
-                        exp_text += f" - {exp.end_date}"
-                    elif exp.current:
-                        exp_text += " - Present"
-                    exp_text += ")"
-                if exp.description:
-                    exp_text += f": {exp.description}"
-                sections.append(exp_text)
-        
-        # Projects
+            lines.append("\nEXPERIENCE")
+            for e in resume.experience:
+                date_range = _format_date_range(e.start_date, e.end_date, e.current)
+                header = f"{e.role} @ {e.company}"
+                if e.location:  header += f", {e.location}"
+                if date_range:  header += f"  ({date_range})"
+                lines.append(f"  • {header}")
+                if e.description:
+                    lines.append(f"    {e.description}")
+
         if resume.projects:
-            sections.append("PROJECTS:")
-            for proj in resume.projects:
-                proj_text = f"- {proj.project_name}"
-                if proj.description:
-                    proj_text += f": {proj.description}"
-                if proj.technologies:
-                    proj_text += f" (Tech: {proj.technologies})"
-                sections.append(proj_text)
-        
-        # Skills
+            lines.append("\nPROJECTS")
+            for p in resume.projects:
+                lines.append(f"  • {p.project_name}")
+                if p.description:   lines.append(f"    {p.description}")
+                if p.technologies:  lines.append(f"    Tech: {p.technologies}")
+
         if resume.skills:
-            skill_names = [skill.name for skill in resume.skills]
-            sections.append(f"SKILLS: {', '.join(skill_names)}")
-        
-        return "\n".join(sections)
+            lines.append("\nSKILLS")
+            lines.append("  " + " · ".join(s.name for s in resume.skills))
+
+        return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────
+# Utility helpers (module-level)
+# ──────────────────────────────────────────────
+
+def _format_date_range(
+    start: Optional[str],
+    end:   Optional[str],
+    current: bool = False,
+) -> str:
+    if not start:
+        return ""
+    end_label = "Present" if current or not end else end
+    return f"{start} – {end_label}"

@@ -3,13 +3,13 @@ Background worker for resume processing tasks.
 Uses FastAPI's BackgroundTasks for async processing.
 """
 import logging
+import asyncio
 from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.database.session import SessionLocal
 from app.services.resume_service.resume_manager import ResumeManager
-from app.services.resume_service.parser import parse_resume
-from app.services.resume_service.ats_analyzer import calculate_ats_score
+from app.services.resume_service.optimizer import ResumeOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def process_resume_parsing(resume_id: int, user_id: int):
         logger.info(f"Starting resume parsing for resume {resume_id}")
         
         manager = ResumeManager(db)
-        result = manager.parse_resume_file(resume_id, user_id)
+        result = asyncio.run(manager.parse_resume_file(resume_id, user_id))
         
         if result:
             logger.info(f"Successfully parsed resume {resume_id}")
@@ -54,7 +54,7 @@ def process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""
         logger.info(f"Starting ATS analysis for resume {resume_id}")
         
         manager = ResumeManager(db)
-        result = manager.get_ats_score(resume_id, user_id, job_description)
+        result = asyncio.run(manager.get_ats_score(resume_id, user_id, job_description))
         
         if result:
             logger.info(f"ATS score calculated for resume {resume_id}: {result.get('overall_score')}")
@@ -67,38 +67,47 @@ def process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""
         db.close()
 
 
-def process_resume_optimization(resume_id: int, user_id: int):
+def process_resume_optimization(resume_id: int, user_id: int, optimization_type: str = "comprehensive", job_description: str = ""):
     """
     Background task to optimize a resume.
     
     Args:
         resume_id: ID of the resume to optimize
         user_id: ID of the user
+        optimization_type: Type of optimization (default: comprehensive)
+        job_description: Optional job description for tailoring
     """
     db = SessionLocal()
     try:
-        logger.info(f"Starting resume optimization for resume {resume_id}")
+        logger.info(f"Starting AI-powered resume optimization for resume {resume_id}")
         
-        # Get resume
-        from app.models import Resume
-        resume = db.query(Resume).filter(
-            Resume.id == resume_id,
-            Resume.user_id == user_id
-        ).first()
+        optimizer = ResumeOptimizer(db)
+        result = asyncio.run(optimizer.optimize_resume(
+            resume_id=resume_id,
+            user_id=user_id,
+            optimization_type=optimization_type,
+            job_description=job_description
+        ))
         
-        if not resume:
-            logger.warning(f"Resume {resume_id} not found")
-            return
-        
-        # TODO: Implement AI-based optimization
-        # For now, just update status
-        resume.status = "optimized"
-        db.commit()
-        
-        logger.info(f"Resume {resume_id} marked as optimized")
-        
+        if result.get("success"):
+            # Update resume status
+            from app.models import Resume
+            resume = db.query(Resume).filter(
+                Resume.id == resume_id,
+                Resume.user_id == user_id
+            ).first()
+            
+            if resume:
+                resume.status = "optimized"
+                db.commit()
+                logger.info(f"Resume {resume_id} successfully optimized by AI")
+            else:
+                logger.warning(f"Resume {resume_id} not found after optimization")
+        else:
+            logger.error(f"AI Optimization failed for resume {resume_id}: {result.get('error')}")
+            
     except Exception as e:
-        logger.error(f"Error optimizing resume {resume_id}: {str(e)}")
+        logger.error(f"Error in AI optimization worker for resume {resume_id}: {str(e)}")
     finally:
         db.close()
 

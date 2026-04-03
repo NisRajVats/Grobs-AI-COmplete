@@ -131,6 +131,8 @@ class InterviewAnswerResponse(BaseModel):
     strengths: Optional[List[str]] = None
     improvements: Optional[List[str]] = None
     suggested_improvements: Optional[List[str]] = None
+    tone_analysis: Optional[str] = None
+    filler_words_detected: Optional[List[str]] = None
     time_taken_seconds: Optional[int] = None
     created_at: str
 

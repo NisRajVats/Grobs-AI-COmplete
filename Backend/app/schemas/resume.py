@@ -3,9 +3,11 @@ Resume Schemas
 
 Pydantic models for resume endpoints.
 """
+import json
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from datetime import datetime
+from app.utils.encryption import decrypt
 
 
 # ==================== Education Schemas ====================
@@ -24,7 +26,7 @@ class EducationBase(BaseModel):
 
 class EducationCreate(EducationBase):
     """Schema for creating education."""
-    pass
+    model_config = {"from_attributes": True}
 
 
 class EducationResponse(EducationBase):
@@ -53,7 +55,7 @@ class ExperienceBase(BaseModel):
 
 class ExperienceCreate(ExperienceBase):
     """Schema for creating experience."""
-    pass
+    model_config = {"from_attributes": True}
 
 
 class ExperienceResponse(ExperienceBase):
@@ -79,7 +81,7 @@ class ProjectBase(BaseModel):
 
 class ProjectCreate(ProjectBase):
     """Schema for creating project."""
-    pass
+    model_config = {"from_attributes": True}
 
 
 class ProjectResponse(ProjectBase):
@@ -101,7 +103,7 @@ class SkillBase(BaseModel):
 
 class SkillCreate(SkillBase):
     """Schema for creating skill."""
-    pass
+    model_config = {"from_attributes": True}
 
 
 class SkillResponse(SkillBase):
@@ -175,41 +177,50 @@ class ResumeResponse(BaseModel):
 
     @classmethod
     def from_orm(cls, obj):
-        import json
-        from app.utils.encryption import decrypt
-        # Convert SQLAlchemy object to dict
-        data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+        """Optimized from_orm with lazy-load aware decryption."""
+        # Use built-in dict construction which is generally faster
+        data = {
+            'id': obj.id,
+            'user_id': obj.user_id,
+            'full_name': decrypt(obj.full_name) if obj.full_name else "",
+            'email': decrypt(obj.email) if obj.email else "",
+            'phone': decrypt(obj.phone) if obj.phone else None,
+            'linkedin_url': decrypt(obj.linkedin_url) if obj.linkedin_url else None,
+            'title': obj.title,
+            'target_role': obj.target_role,
+            'template_name': obj.template_name,
+            'filename': obj.filename,
+            'resume_file_url': obj.resume_file_url,
+            'ats_score': obj.ats_score,
+            'analysis_score': obj.analysis_score,
+            'status': obj.status,
+            'created_at': obj.created_at,
+            'updated_at': obj.updated_at,
+        }
         
-        # Decrypt sensitive fields for response
-        if data.get('full_name'):
-            data['full_name'] = decrypt(data['full_name'])
-        if data.get('email'):
-            data['email'] = decrypt(data['email'])
-        if data.get('phone'):
-            data['phone'] = decrypt(data['phone'])
-        if data.get('linkedin_url'):
-            data['linkedin_url'] = decrypt(data['linkedin_url'])
-        
-        # Add relationships or calculated fields
+        # Add version from relationship
         data['version'] = len(obj.versions) if hasattr(obj, 'versions') else 1
         
-        # Parse JSON fields if they are strings
+        # Process parsed_data
         pd = {}
-        if data.get('parsed_data') and isinstance(data['parsed_data'], str):
-            try:
-                pd = json.loads(data['parsed_data'])
-                if not isinstance(pd, dict):
+        if obj.parsed_data:
+            if isinstance(obj.parsed_data, str):
+                try:
+                    pd = json.loads(obj.parsed_data)
+                except:
                     pd = {}
-            except:
-                pd = {}
+            elif isinstance(obj.parsed_data, dict):
+                pd = obj.parsed_data
         
-        # Sync decrypted root fields into parsed_data for consistent preview
-        pd['full_name'] = data.get('full_name')
-        pd['email'] = data.get('email')
-        pd['phone'] = data.get('phone')
-        pd['linkedin_url'] = data.get('linkedin_url')
-        pd['title'] = data.get('title')
-        pd['target_role'] = data.get('target_role')
+        # Sync decrypted fields for preview consistency
+        pd.update({
+            'full_name': data['full_name'],
+            'email': data['email'],
+            'phone': data['phone'],
+            'linkedin_url': data['linkedin_url'],
+            'title': data['title'],
+            'target_role': data['target_role']
+        })
         
         data['parsed_data'] = pd
         
@@ -229,34 +240,44 @@ class ResumeDetailResponse(ResumeResponse):
 
     @classmethod
     def from_orm(cls, obj):
-        import json
-        res = super().from_orm(obj)
-        data = res.dict()
+        """Optimized from_orm for detailed resume response."""
+        # Use our own logic instead of super().from_orm + res.dict()
+        res = ResumeResponse.from_orm(obj)
+        data = res.model_dump()
         
-        # Add nested relationships
-        data['education'] = [EducationCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in EducationCreate.model_fields}) for e in obj.education]
-        data['experience'] = [ExperienceCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in ExperienceCreate.model_fields}) for e in obj.experience]
-        data['projects'] = [ProjectCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in ProjectCreate.model_fields}) for e in obj.projects]
-        data['skills'] = [SkillCreate(**{c.name: getattr(e, c.name) for c in e.__table__.columns if c.name in SkillCreate.model_fields}) for e in obj.skills]
+        # Add nested relationships efficiently
+        data['education'] = [EducationCreate.model_validate(e) for e in obj.education]
+        data['experience'] = [ExperienceCreate.model_validate(e) for e in obj.experience]
+        data['projects'] = [ProjectCreate.model_validate(e) for e in obj.projects]
+        data['skills'] = [SkillCreate.model_validate(e) for e in obj.skills]
         
-        # Sync structured sections into parsed_data for consistent preview
-        if isinstance(data['parsed_data'], dict):
-            data['parsed_data']['education'] = data['education']
-            data['parsed_data']['experience'] = data['experience']
-            data['parsed_data']['projects'] = data['projects']
-            data['parsed_data']['skills'] = data['skills']
+        # Sync structured sections into parsed_data
+        pd = data.get('parsed_data')
+        if not isinstance(pd, dict):
+            pd = {}
         
-        # Get latest analysis
+        pd.update({
+            'education': [e.model_dump() for e in data['education']],
+            'experience': [e.model_dump() for e in data['experience']],
+            'projects': [e.model_dump() for e in data['projects']],
+            'skills': [e.model_dump() for e in data['skills']]
+        })
+        data['parsed_data'] = pd
+        
+        # Latest analysis
         if hasattr(obj, 'analyses') and obj.analyses:
-            latest = sorted(obj.analyses, key=lambda x: x.created_at, reverse=True)[0]
-            try:
-                data['latest_analysis'] = {
-                    "score": latest.score,
-                    "feedback": json.loads(latest.feedback) if latest.feedback else {},
-                    "created_at": latest.created_at
-                }
-            except:
-                data['latest_analysis'] = {"score": latest.score, "created_at": latest.created_at}
+            # We already have analyses eager loaded
+            sorted_analyses = sorted(obj.analyses, key=lambda x: x.created_at, reverse=True)
+            if sorted_analyses:
+                latest = sorted_analyses[0]
+                try:
+                    data['latest_analysis'] = {
+                        "score": latest.score,
+                        "feedback": json.loads(latest.feedback) if latest.feedback and isinstance(latest.feedback, str) else latest.feedback or {},
+                        "created_at": latest.created_at
+                    }
+                except:
+                    data['latest_analysis'] = {"score": latest.score, "created_at": latest.created_at}
                 
         return cls(**data)
 
@@ -338,6 +359,9 @@ class ATSScoreResponse(BaseModel):
     category_scores: dict
     issues: List[str]
     recommendations: List[str]
+    skill_analysis: Optional[dict] = None
+    keyword_gap: Optional[dict] = None
+    industry_tips: Optional[List[str]] = None
 
 
 # ==================== Job Match Schemas ====================
@@ -385,4 +409,16 @@ class OptimizeResumeResponse(BaseModel):
     matching_skills: Optional[List[str]] = []
     skill_recommendations: Optional[List[str]] = []
     certificate_recommendations: Optional[List[str]] = []
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request schema for bulk deleting resumes."""
+    ids: List[int]
+
+
+class BulkDeleteResponse(BaseModel):
+    """Response schema for bulk delete operation."""
+    deleted: int
+    failed: int
+    message: str
 

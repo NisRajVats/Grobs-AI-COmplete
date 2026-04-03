@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { resumeAPI } from "../../services/api";
+import { useNavigate } from "react-router-dom";
 import {
   FileText,
   User,
@@ -51,7 +52,7 @@ const PRINT_STYLES = `
 `;
 
 /* ─── Section heading ─────────────────────────────────────────────────────── */
-const SH = ({ children }) => (
+const SH = React.memo(({ children }) => (
   <div style={{ borderBottom: '1.5px solid #000', marginBottom: '10px', marginTop: '14px', width: '100%' }}>
     <h4 style={{
       fontSize: '13pt',
@@ -59,16 +60,16 @@ const SH = ({ children }) => (
       textTransform: 'uppercase',
       color: '#000',
       margin: '0 0 2px 0',
-      fontFamily: '"Georgia", serif',
+      fontFamily: '"Georgia", serif'  ,
       letterSpacing: '0.05em',
     }}>
       {children}
     </h4>
   </div>
-);
+));
 
 /* ─── Bullet renderer ─────────────────────────────────────────────────────── */
-const Bullets = ({ points, text }) => {
+const Bullets = React.memo(({ points, text }) => {
   if (points && points.length > 0) return (
     <ul style={{ listStyle: 'none', padding: 0, margin: '4px 0 0 0' }}>
       {points.map((pt, i) => (
@@ -93,19 +94,19 @@ const Bullets = ({ points, text }) => {
     );
   }
   return null;
-};
+});
 
 /* ─── Live preview sub-component ─────────────────────────────────────────── */
-const LiveResume = ({ data }) => {
-  const contactItems = [data.personal?.email, data.personal?.phone, data.personal?.location].filter(Boolean);
+const LiveResume = React.memo(({ data }) => {
+  const contactItems = React.useMemo(() => [data.personal?.email, data.personal?.phone, data.personal?.location].filter(Boolean), [data.personal]);
 
-  const groupedSkills = (data.skills || []).reduce((acc, s) => {
+  const groupedSkills = React.useMemo(() => (data.skills || []).reduce((acc, s) => {
     const cat  = typeof s === 'object' ? (s.category || 'Skills') : 'Skills';
     const name = typeof s === 'object' ? s.name : s;
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(name);
     return acc;
-  }, {});
+  }, {}), [data.skills]);
 
   return (
     <div
@@ -282,10 +283,11 @@ const LiveResume = ({ data }) => {
       )}
     </div>
   );
-};
+});
 
 /* ═══ Main ResumeBuilder ═══════════════════════════════════════════════════ */
 const ResumeBuilder = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("personal");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -303,6 +305,16 @@ const ResumeBuilder = () => {
     projects: [],
     skills: [],
   });
+
+  // Debounced data for live preview to prevent re-renders on every keystroke
+  const [previewData, setPreviewData] = useState(resumeData);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPreviewData(resumeData);
+    }, 400); // 400ms debounce
+    return () => clearTimeout(timer);
+  }, [resumeData]);
 
   useEffect(() => {
     return () => {
@@ -334,18 +346,22 @@ const ResumeBuilder = () => {
         experience: resumeData.experience.map(e => ({ company: e.company, role: e.role, duration: e.duration, desc: e.desc })),
         skills:     resumeData.skills.map(s => ({ name: s })),
       };
-      await resumeAPI.createResume(payload);
-      showSaveMsg("Saved!");
-    } catch (_error) {
-      console.error("Save error:", _error);
-      showSaveMsg("Save failed");
+      const response = await resumeAPI.createResume(payload);
+      showSaveMsg(`Resume "${payload.title || payload.full_name}" saved successfully! Redirecting...`);
+      
+      setTimeout(() => {
+        navigate('/app/resumes', { state: { success: `Resume "${payload.title || payload.full_name}" created!` } });
+      }, 800);
+    } catch (error) {
+      console.error("Save error:", error);
+      showSaveMsg(`Save failed: ${error.response?.data?.detail || 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDownload = () => {
-    if (typeof window !== "undefined") window.print();
+    showSaveMsg('Save your resume first, then download from My Resumes page!');
   };
 
   const showParseMsg = (msg) => {
@@ -460,13 +476,13 @@ const ResumeBuilder = () => {
               <FileText className="text-blue-500" /> Resume Builder
             </h2>
             <div className="flex gap-2 items-center">
-              {saveMsg && (
-                <span className={`text-xs font-medium ${saveMsg === "Saved!" ? "text-green-400" : "text-rose-400"}`}>
+{saveMsg && (
+                <span className={`text-xs font-bold px-3 py-1 rounded-full ${saveMsg.includes('Saved') || saveMsg.includes('successfully') ? "bg-green-500/20 text-green-400 border border-green-500/30" : "bg-rose-500/20 text-rose-400 border border-rose-500/30"}`}>
                   {saveMsg}
                 </span>
               )}
               {parseMsg && (
-                <span className={`text-xs font-medium ${parseMsg.includes("Success") ? "text-green-400" : "text-amber-400"}`}>
+                <span className={`text-xs font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30`}>
                   {parseMsg}
                 </span>
               )}
@@ -650,10 +666,10 @@ const ResumeBuilder = () => {
                 </div>
               )}
 
-              {/* ── Skills ── */}
+              {/* ── Skills (Last Section) ── */}
               {activeTab === "skills" && (
                 <div className="space-y-6">
-                  <h3 className="text-lg font-bold text-white">Skills</h3>
+                  <h3 className="text-lg font-bold text-white">Skills <span className="text-green-400 text-sm font-normal">(Last section - ready to save!)</span></h3>
                   <input
                     ref={skillInputRef}
                     placeholder="Type a skill and press Enter..."
@@ -680,13 +696,25 @@ const ResumeBuilder = () => {
                 >
                   <ChevronLeft size={20} /> Previous
                 </button>
-                <button
-                  onClick={() => { const idx = tabs.findIndex(t => t.id === activeTab); if (idx < tabs.length - 1) setActiveTab(tabs[idx + 1].id); }}
-                  disabled={activeTab === tabs[tabs.length - 1].id}
-                  className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  Next <ChevronRight size={20} />
-                </button>
+                {activeTab === "skills" ? (
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="flex-1 py-4 bg-green-600 text-white font-bold rounded-2xl hover:bg-green-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Save size={20} className="ml-1" /> Save Resume
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { 
+                      const idx = tabs.findIndex(t => t.id === activeTab); 
+                      if (idx < tabs.length - 1) setActiveTab(tabs[idx + 1].id); 
+                    }}
+                    className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-500 transition-all flex items-center justify-center gap-2"
+                  >
+                    Next <ChevronRight size={20} />
+                  </button>
+                )}
               </div>
             </motion.div>
           </AnimatePresence>
@@ -706,7 +734,7 @@ const ResumeBuilder = () => {
         </div>
 
         {/* Render the live resume */}
-        <LiveResume data={resumeData} />
+        <LiveResume data={previewData} />
       </div>
     </div>
   );

@@ -17,31 +17,60 @@ class EmailService:
     """Email service for sending notifications."""
     
     def __init__(self):
-        self.smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-        self.smtp_port = int(os.getenv('SMTP_PORT', 587))
-        self.email_user = os.getenv('EMAIL_USER')
-        self.email_password = os.getenv('EMAIL_PASSWORD')
+        self.smtp_server = settings.SMTP_HOST or 'smtp.gmail.com'
+        self.smtp_port = settings.SMTP_PORT or 587
+        self.email_user = settings.SMTP_USER
+        self.email_password = settings.SMTP_PASSWORD
+        self.from_email = settings.SMTP_FROM_EMAIL or "noreply@grobsai.com"
+        self.from_name = settings.SMTP_FROM_NAME or "GrobsAI"
         
     def send_email(
         self,
         to_email: str,
         subject: str,
         template_name: str,
-        context: dict
-    ) -> bool:
+        context: dict,
+        attachments: Optional[list] = None
+    ) -> dict:
         """Send email using HTML template."""
         try:
+            # Check if SMTP is configured
+            if not self.email_user or not self.email_password:
+                logger.warning(f"SMTP not configured. Mocking email to {to_email}")
+                if settings.ENVIRONMENT == "development":
+                    logger.info(f"MOCK EMAIL CONTENT: {context}")
+                    return {"success": True, "message_id": "mock_id_dev", "mock": True}
+                return {"success": False, "error": "SMTP not configured"}
+
             template_content = self._load_template(template_name)
             template = Template(template_content)
-            html_content = template.render(**context)
+            
+            # Add common context
+            full_context = {
+                **context,
+                "app_url": settings.APP_URL,
+                "app_name": settings.APP_NAME,
+            }
+            
+            html_content = template.render(**full_context)
             
             msg = MIMEMultipart('alternative')
-            msg['From'] = self.email_user
+            msg['From'] = f"{self.from_name} <{self.from_email}>"
             msg['To'] = to_email
             msg['Subject'] = subject
             
             html_part = MIMEText(html_content, 'html')
             msg.attach(html_part)
+            
+            # Handle attachments
+            if attachments:
+                from email.mime.application import MIMEApplication
+                for file_path in attachments:
+                    if os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                            msg.attach(part)
             
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
@@ -49,24 +78,23 @@ class EmailService:
                 server.send_message(msg)
                 
             logger.info(f"Email sent successfully to {to_email}")
-            return True
+            return {"success": True, "message_id": msg.get("Message-ID")}
         except Exception as e:
             logger.error(f"Failed to send email to {to_email}: {e}")
-            return False
+            return {"success": False, "error": str(e)}
     
     def send_resume_analysis_notification(
         self,
         user_email: str,
         resume_name: str,
         score: int
-    ) -> bool:
+    ) -> dict:
         """Send resume analysis notification."""
         subject = f"Your resume analysis is ready! Score: {score}%"
         context = {
             'user_name': user_email.split('@')[0],
             'resume_name': resume_name,
-            'score': score,
-            'app_url': settings.APP_URL
+            'score': score
         }
         return self.send_email(user_email, subject, 'resume_analysis', context)
     
@@ -76,15 +104,14 @@ class EmailService:
         job_title: str,
         company: str,
         match_score: int
-    ) -> bool:
+    ) -> dict:
         """Send job match notification."""
         subject = f"New job match found: {job_title} at {company}"
         context = {
             'user_name': user_email.split('@')[0],
             'job_title': job_title,
             'company': company,
-            'match_score': match_score,
-            'app_url': settings.APP_URL
+            'match_score': match_score
         }
         return self.send_email(user_email, subject, 'job_match', context)
     
@@ -95,7 +122,7 @@ class EmailService:
         company: str,
         interview_date: str,
         interview_time: str
-    ) -> bool:
+    ) -> dict:
         """Send interview reminder."""
         subject = f"Interview reminder: {job_title} at {company}"
         context = {
@@ -103,11 +130,18 @@ class EmailService:
             'job_title': job_title,
             'company': company,
             'interview_date': interview_date,
-            'interview_time': interview_time,
-            'app_url': settings.APP_URL
+            'interview_time': interview_time
         }
         return self.send_email(user_email, subject, 'interview_reminder', context)
-    
+
+    def send_welcome_email(self, user_email: str, user_name: str) -> dict:
+        """Send welcome email to new users."""
+        subject = f"Welcome to {settings.APP_NAME}!"
+        context = {
+            'user_name': user_name,
+        }
+        return self.send_email(user_email, subject, 'welcome', context)
+
     def _load_template(self, template_name: str) -> str:
         """Load HTML email template."""
         template_dir = os.path.join(
@@ -149,7 +183,43 @@ class EmailService:
                 <p>Interview: {{ job_title }} at {{ company }}</p>
                 <p>Date: {{ interview_date }} at {{ interview_time }}</p>
             </body></html>
+            """,
+            'welcome': """
+            <html><body>
+                <h2>Welcome to {{ app_name }}!</h2>
+                <p>Hello {{ user_name }},</p>
+                <p>Thank you for joining us. We're excited to help you in your career journey.</p>
+                <p><a href="{{ app_url }}">Get started now</a></p>
+            </body></html>
+            """,
+            'password_reset': """
+            <html><body>
+                <h2>Password Reset Request</h2>
+                <p>Hello {{ user_name }},</p>
+                <p>We received a request to reset your password. Click the link below to set a new one:</p>
+                <p><a href="{{ reset_link }}">Reset Password</a></p>
+                <p>If you didn't request this, you can safely ignore this email.</p>
+            </body></html>
             """
         }
         return templates.get(template_name, "<html><body><p>{{ message }}</p></body></html>")
+
+
+# Convenience function for external use
+def send_email(
+    to_email: str,
+    subject: str,
+    template_name: str,
+    template_data: dict,
+    attachments: Optional[list] = None
+) -> dict:
+    """Helper function to send email without instantiating service."""
+    service = EmailService()
+    return service.send_email(
+        to_email=to_email,
+        subject=subject,
+        template_name=template_name,
+        context=template_data,
+        attachments=attachments
+    )
 

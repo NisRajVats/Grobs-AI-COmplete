@@ -7,10 +7,12 @@ import logging
 from sqlalchemy.orm import Session
 from datetime import datetime
 
+import json
 from app.database.session import SessionLocal
-from app.models import Resume, ResumeContent, ResumeAnalysis
+from app.models import Resume, ResumeContent, ResumeAnalysis, User
 from app.utils.encryption import decrypt
 from app.services.resume_service.ats_analyzer import calculate_ats_score as calculate_ats
+from app.workers.base_worker import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,8 @@ def process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""
         
         # Calculate ATS score
         try:
-            ats_result = calculate_ats(resume_for_ats, job_description)
+            import asyncio
+            ats_result = asyncio.run(calculate_ats(resume_for_ats, job_description))
         except Exception as e:
             logger.error(f"[ATSAnalysisWorker] Failed to calculate ATS score: {e}")
             return {"success": False, "error": f"ATS calculation error: {str(e)}"}
@@ -64,11 +67,10 @@ def process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""
         analysis = ResumeAnalysis(
             resume_id=resume_id,
             analysis_type="ats",
-            ats_score=ats_result.get("overall_score"),
-            overall_score=ats_result.get("overall_score"),
-            analysis_feedback=ats_result.get("category_scores"),
-            missing_keywords=ats_result.get("issues", []),
-            suggestions=ats_result.get("recommendations", []),
+            score=ats_result.get("overall_score"),
+            feedback=json.dumps(ats_result.get("category_scores")),
+            missing_keywords=json.dumps(ats_result.get("issues", [])),
+            suggestions=json.dumps(ats_result.get("recommendations", [])),
             job_description=job_description if job_description else None
         )
         
@@ -76,11 +78,23 @@ def process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""
         
         # Update resume status
         resume.status = "analyzed"
-        resume.updated_at = datetime.now().isoformat()
+        resume.ats_score = ats_result.get("overall_score")
+        resume.updated_at = datetime.utcnow()
         
         db.commit()
         
         logger.info(f"[ATSAnalysisWorker] Successfully analyzed resume {resume_id}, score: {ats_result.get('overall_score')}")
+        
+        # Trigger email notification
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            enqueue_task(
+                "email_worker.resume_analysis",
+                recipient_email=user.email,
+                user_name=user.full_name or user.email.split('@')[0],
+                resume_title=resume.title or resume.filename or "My Resume",
+                ats_score=ats_result.get("overall_score")
+            )
         
         return {
             "success": True,

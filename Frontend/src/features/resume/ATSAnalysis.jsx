@@ -59,7 +59,18 @@ const ATSAnalysis = () => {
       }
     } catch (err) {
       console.error("Optimization error:", err);
-      setError(err.response?.data?.detail || "An error occurred during AI optimization.");
+      // Provide more specific error messages
+      let errorMessage = "An error occurred during AI optimization.";
+      if (err.response?.status === 404) {
+        errorMessage = "Resume not found. Please refresh the page and try again.";
+      } else if (err.response?.status === 400) {
+        errorMessage = err.response.data?.detail || "Resume has insufficient data for optimization. Please add more content to your resume first.";
+      } else if (err.response?.status === 500) {
+        errorMessage = "The optimization service is temporarily unavailable. Please try again in a few moments.";
+      } else if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail;
+      }
+      setError(errorMessage);
     } finally {
       setOptimizing(false);
     }
@@ -242,6 +253,84 @@ const ATSAnalysis = () => {
           </div>
         </div>
       </div>
+
+      {/* New: Skill Extraction Section */}
+      {analysis?.skill_analysis && (
+        <div className="card-glass p-8 space-y-6">
+          <h3 className="text-xl font-bold text-white flex items-center gap-2">
+            <Target className="text-blue-400" /> Advanced Skill Extraction
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="space-y-3">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Hard Skills</h4>
+              <div className="flex flex-wrap gap-2">
+                {analysis.skill_analysis.hard_skills?.map((skill, i) => (
+                  <span key={i} className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-400 text-xs font-bold">{skill}</span>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-3">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Soft Skills</h4>
+              <div className="flex flex-wrap gap-2">
+                {analysis.skill_analysis.soft_skills?.map((skill, i) => (
+                  <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-bold">{skill}</span>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-3">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Tools & Platforms</h4>
+              <div className="flex flex-wrap gap-2">
+                {analysis.skill_analysis.tools?.map((skill, i) => (
+                  <span key={i} className="px-3 py-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-400 text-xs font-bold">{skill}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New: Keyword Gap Analysis */}
+      {analysis?.keyword_gap && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="card-glass p-6 space-y-4">
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <CheckCircle2 className="text-green-400" /> Matched Keywords
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {analysis.keyword_gap.matched?.map((keyword, i) => (
+                <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-medium">{keyword}</span>
+              ))}
+            </div>
+          </div>
+          <div className="card-glass p-6 space-y-4">
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <AlertTriangle className="text-rose-400" /> Missing Keywords
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {analysis.keyword_gap.missing?.map((keyword, i) => (
+                <span key={i} className="px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-medium">{keyword}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New: Industry Optimization Section */}
+      {analysis?.industry_tips && analysis.industry_tips.length > 0 && (
+        <div className="card-glass p-8 bg-linear-to-r from-blue-600/5 to-indigo-600/5 border-blue-500/20">
+          <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+            <Zap className="text-amber-400" /> Industry-Specific Optimization
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {analysis.industry_tips.map((tip, i) => (
+              <div key={i} className="p-4 bg-white/5 border border-white/5 rounded-2xl text-slate-300 text-sm flex gap-3 hover:bg-white/10 transition-colors">
+                <span className="text-blue-500 font-bold">•</span>
+                {tip}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-4">
         <button 

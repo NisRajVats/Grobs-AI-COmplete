@@ -8,6 +8,7 @@ from .skills import Skill
 from .jobs import Job, JobSkill, JobEmbedding, JobApplication, SavedJob
 from .notification import Notification
 from .interview import InterviewSession, InterviewQuestion, InterviewAnswer
+from .calendar import CalendarEvent
 
 __all__ = [
     'User',
@@ -28,5 +29,6 @@ __all__ = [
     'Notification',
     'InterviewSession',
     'InterviewQuestion',
-    'InterviewAnswer'
+    'InterviewAnswer',
+    'CalendarEvent'
 ]

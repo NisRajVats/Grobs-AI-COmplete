@@ -13,27 +13,32 @@ from app.database.session import engine, Base, SessionLocal
 import app.models  # Import all models
 
 def setup():
-    print("🔧 Setting up GrobsAI Backend...")
+    print("Setting up GrobsAI Backend...")
     
     # Create all tables
-    print("📊 Creating database tables...")
+    print("Creating database tables...")
     Base.metadata.create_all(bind=engine)
-    print("✅ Database tables created!")
+    print("Database tables created!")
     
     db = SessionLocal()
     try:
         # Check if we need to seed data
         from app.models import Job
+        from app.services.job_service.ingestion import ingest_all_jobs
         job_count = db.query(Job).count()
         
         if job_count == 0:
-            print("🌱 Seeding sample jobs...")
-            seed_jobs(db)
-            print(f"✅ Sample jobs added!")
+            print("Fetching real jobs from Greenhouse and Lever APIs...")
+            ingested = ingest_all_jobs(db)
+            if ingested == 0:
+                print("API fetch returned no jobs. Seeding sample jobs as fallback...")
+                seed_jobs(db)
+            else:
+                print(f"Successfully ingested {ingested} real jobs!")
         else:
-            print(f"ℹ️  Database already has {job_count} jobs, skipping seed.")
+            print(f"Database already has {job_count} jobs, skipping seed.")
         
-        print("\n✅ Setup complete! You can now run the backend:")
+        print("\nSetup complete! You can now run the backend:")
         print("   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000")
         
     finally:

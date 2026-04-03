@@ -13,6 +13,7 @@ from app.schemas.user import (
     DashboardStats
 )
 from app.utils.dependencies import get_current_user
+from app.utils.cache import cache_response
 
 from datetime import datetime
 
@@ -54,6 +55,7 @@ async def update_current_user_profile(
 
 
 @router.get("/me/dashboard-stats", response_model=DashboardStats)
+@cache_response(ttl=300)
 async def get_dashboard_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

@@ -79,7 +79,7 @@ async def run_evaluation(db: Session = Depends(get_db)):
         
         # 1. Resume Screening Accuracy (ai_resume_screening (1).csv)
         try:
-            screening_metrics = evaluate_resume_screening()
+            screening_metrics = await evaluate_resume_screening()
         except Exception as e:
             logger.error(f"Screening evaluation failed: {e}")
             screening_metrics = {"accuracy": 0, "precision": 0, "latency": 0, "samples": 0}
@@ -267,7 +267,7 @@ def scan_codebase_completeness() -> Dict[str, int]:
         
     return scores
 
-def evaluate_resume_screening():
+async def evaluate_resume_screening():
     file_path = os.path.join(DATA_DIR, "ai_resume_screening (1).csv")
     if not os.path.exists(file_path):
         return {"accuracy": 0, "precision": 0, "latency": 0, "samples": 0}
@@ -316,7 +316,7 @@ def evaluate_resume_screening():
         
         # 1. Run our ACTUAL ATS Analyzer logic
         # We don't have JD in this dataset, so we use job_role as proxy
-        analysis = calculate_ats_score(resume, job_description=row.get('job_role', ''))
+        analysis = await calculate_ats_score(resume, job_description=row.get('job_role', ''))
         score = analysis.get('overall_score', 0)
         
         # 2. Compare prediction with dataset ground truth ('shortlisted' column)

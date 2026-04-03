@@ -12,7 +12,9 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models import User
+from app.workers.base_worker import enqueue_task
 from app.core.security import (
     verify_password,
     get_password_hash,
@@ -92,6 +94,15 @@ class AuthService:
         self.db.add(user)
         self.db.commit()
         self.db.refresh(user)
+        
+        # Send welcome email
+        enqueue_task(
+            "email_worker.process",
+            recipient_email=email,
+            subject=f"Welcome to {settings.APP_NAME}!",
+            template_name="welcome",
+            template_data={"user_name": full_name or email.split('@')[0]}
+        )
         
         logger.info(f"New user registered: {email}")
         
@@ -284,6 +295,19 @@ class AuthService:
         
         if user:
             token = create_password_reset_token(email)
+            
+            # Send password reset email
+            enqueue_task(
+                "email_worker.process",
+                recipient_email=email,
+                subject="Password Reset Request",
+                template_name="password_reset",
+                template_data={
+                    "user_name": user.full_name or email.split('@')[0],
+                    "reset_link": f"{settings.APP_URL}/reset-password?token={token}"
+                }
+            )
+            
             logger.info(f"Password reset requested for: {email}")
             return token
         

@@ -6,6 +6,7 @@ This worker extracts text and structured data from uploaded resumes.
 import logging
 import os
 import json
+import asyncio
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -14,7 +15,7 @@ from app.database.session import SessionLocal
 logger = logging.getLogger(__name__)
 from app.models import Resume, ResumeContent, Education, Experience, Project, Skill
 from app.utils.encryption import encrypt
-from app.services.resume_service.parser import parse_resume as parse_resume_file
+from app.services.resume_service.parser import parse_resume_async as parse_resume_file_async
 
 
 def _update_nested_data(db: Session, resume: Resume, data: dict):
@@ -108,7 +109,7 @@ def process_resume_parsing(resume_id: int, user_id: int) -> dict:
         
         # Parse the resume file
         try:
-            parsed_data = parse_resume_file(file_path)
+            parsed_data = asyncio.run(parse_resume_file_async(file_path))
         except Exception as e:
             logger.error(f"[ResumeParseWorker] Failed to parse file: {e}")
             return {"success": False, "error": f"Parse error: {str(e)}"}

@@ -26,6 +26,48 @@ router = APIRouter(prefix="/api/interview", tags=["Interview"])
 
 # ==================== Endpoints ====================
 
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    context: Optional[str] = "career_assistant"
+
+@router.post("/ai-chat")
+async def ai_chat(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI Career Assistant chat endpoint.
+    """
+    try:
+        # Build prompt from conversation history
+        history_str = "\n".join([f"{m.role}: {m.content}" for m in request.messages])
+        
+        prompt = f"""
+You are an expert AI Career Assistant for GrobsAI. Your goal is to help the user with their career, resume, interviews, and professional growth.
+Be professional, encouraging, and provide specific, actionable advice.
+
+Conversation history:
+{history_str}
+
+Assistant:"""
+
+        # Use LLM service to generate response
+        response = llm_service.generate_text(prompt)
+        
+        return {"reply": response.content}
+    except Exception as e:
+        print(f"Error in AI Chat: {e}")
+        # Fallback response if LLM fails
+        return {"reply": "I'm having a bit of trouble connecting to my brain right now. Could you try rephrasing your question?"}
+
 @router.post("/questions")
 async def generate_questions(
     request: QuestionGenerationRequest,
@@ -384,18 +426,27 @@ async def get_question_feedback(
             
             # Generate feedback using LLM
             prompt = f"""
-Provide feedback for this interview answer.
+Provide professional feedback for this interview answer. 
 
 Question: {question.question_text}
+Question Type: {question.question_type}
 Answer: {answer.answer_text}
+
+Analyze the answer based on:
+1. Relevancy: How well it addresses the question.
+2. Structure: Use of STAR method (for behavioral) or technical depth (for technical).
+3. Tone: Professionalism and confidence level.
+4. Language: Use of action verbs and impact-oriented results.
 
 Provide feedback in this JSON format:
 {{
     "score": <score 0-100>,
-    "feedback": "<general feedback>",
-    "strengths": ["<strength 1>", "<strength 2>"],
-    "improvements": ["<improvement 1>", "<improvement 2>"],
-    "suggested_improvements": ["<specific suggestion 1>", "<specific suggestion 2>"]
+    "feedback": "<detailed constructive feedback>",
+    "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+    "improvements": ["<area for improvement 1>", "<area for improvement 2>"],
+    "suggested_improvements": ["<specific rephrased example or suggestion 1>", "<specific suggestion 2>"],
+    "tone_analysis": "<analysis of the tone and confidence>",
+    "filler_words_detected": ["<filler word if any, or empty list>"]
 }}
 """
             
@@ -408,7 +459,9 @@ Provide feedback in this JSON format:
                         "feedback": {"type": "string"},
                         "strengths": {"type": "array", "items": {"type": "string"}},
                         "improvements": {"type": "array", "items": {"type": "string"}},
-                        "suggested_improvements": {"type": "array", "items": {"type": "string"}}
+                        "suggested_improvements": {"type": "array", "items": {"type": "string"}},
+                        "tone_analysis": {"type": "string"},
+                        "filler_words_detected": {"type": "array", "items": {"type": "string"}}
                     }
                 }
             )
@@ -419,6 +472,8 @@ Provide feedback in this JSON format:
                 answer.strengths = response.get('strengths', [])
                 answer.improvements = response.get('improvements', [])
                 answer.suggested_improvements = response.get('suggested_improvements', [])
+                answer.tone_analysis = response.get('tone_analysis', '')
+                answer.filler_words_detected = response.get('filler_words_detected', [])
                 
                 db.commit()
                 
@@ -441,6 +496,8 @@ Provide feedback in this JSON format:
             "strengths": answer.strengths,
             "improvements": answer.improvements,
             "suggested_improvements": answer.suggested_improvements,
+            "tone_analysis": answer.tone_analysis,
+            "filler_words_detected": answer.filler_words_detected,
             "time_taken_seconds": answer.time_taken_seconds
         }
     }

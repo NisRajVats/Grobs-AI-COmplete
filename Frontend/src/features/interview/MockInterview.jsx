@@ -14,6 +14,7 @@ const MockInterview = () => {
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [showSetup, setShowSetup] = useState(!sessionId);
   const [setupData, setSetupData] = useState({
     job_title: location.state?.target_role || '',
@@ -83,10 +84,11 @@ const MockInterview = () => {
         ...setupData
       });
       setQuestions([
-        { id: 1, question_text: 'Tell me about yourself and why you\'re interested in this role.', question_type: 'behavioral', tips: 'Use the present-past-future format' },
-        { id: 2, question_text: 'Describe a challenging technical problem you solved.', question_type: 'technical', tips: 'Use the STAR method' },
-        { id: 3, question_text: 'How do you handle disagreements with teammates?', question_type: 'behavioral', tips: 'Focus on communication and empathy' },
-        { id: 4, question_text: 'Where do you see yourself in 5 years?', question_type: 'behavioral', tips: 'Show ambition and alignment with the role' },
+        { id: 1, question_text: 'Tell me about yourself and your professional background.', question_type: 'behavioral', tips: 'Use the Present-Past-Future model' },
+        { id: 2, question_text: 'What is your greatest professional achievement to date?', question_type: 'behavioral', tips: 'Focus on impact and metrics' },
+        { id: 3, question_text: 'Describe a complex technical challenge you faced and how you resolved it.', question_type: 'technical', tips: 'Use the STAR method' },
+        { id: 4, question_text: 'How do you handle conflict within a team environment?', question_type: 'behavioral', tips: 'Showcase emotional intelligence' },
+        { id: 5, question_text: 'Why should we hire you for this specific role?', question_type: 'behavioral', tips: 'Align your skills with their needs' },
       ]);
       setShowSetup(false);
       setTimeElapsed(0);
@@ -111,27 +113,32 @@ const MockInterview = () => {
       
       // Get feedback
       await getFeedback(currentQuestion.id);
-      
-      // Move to next question
-      if (currentQuestionIndex < questions.length - 1) {
-        setCurrentQuestionIndex(prev => prev + 1);
-        setAnswer('');
-        setTimeElapsed(0);
-        setFeedback(null);
-      } else {
-        // Complete session
-        await completeSession();
-      }
+      setShowFeedback(true);
     } catch (error) {
       console.error("Error submitting answer:", error);
-      // Continue locally
-      if (currentQuestionIndex < questions.length - 1) {
-        setCurrentQuestionIndex(prev => prev + 1);
-        setAnswer('');
-        setTimeElapsed(0);
-      }
+      // Fallback feedback if needed
+      setFeedback({
+        score: 70,
+        feedback: "Good attempt! (Simulated feedback)",
+        strengths: ["Clear communication"],
+        suggested_improvements: ["Add more details"]
+      });
+      setShowFeedback(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleNextQuestion = async () => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(prev => prev + 1);
+      setAnswer('');
+      setTimeElapsed(0);
+      setFeedback(null);
+      setShowFeedback(false);
+    } else {
+      // Complete session
+      await completeSession();
     }
   };
 
@@ -344,12 +351,25 @@ const MockInterview = () => {
             </div>
             
             {/* Answer Input */}
-            <textarea
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="Type your answer here..."
-              className="w-full h-40 bg-slate-900/50 border border-white/10 rounded-xl p-4 text-white resize-none focus:ring-2 focus:ring-green-500/30"
-            />
+            <div className="relative">
+              <textarea
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                disabled={showFeedback || loading}
+                placeholder="Type your answer here..."
+                className="w-full h-40 bg-slate-900/50 border border-white/10 rounded-xl p-4 text-white resize-none focus:ring-2 focus:ring-green-500/30 disabled:opacity-50"
+              />
+              <div className="absolute bottom-4 right-4 flex items-center gap-4 text-xs font-bold">
+                <span className={`${answer.split(/\s+/).filter(Boolean).length < 20 ? 'text-amber-400' : 'text-slate-500'}`}>
+                  {answer.split(/\s+/).filter(Boolean).length} words
+                </span>
+                {timeElapsed > 0 && (
+                  <span className="text-slate-500">
+                    {Math.round(answer.split(/\s+/).filter(Boolean).length / (timeElapsed / 60))} wpm
+                  </span>
+                )}
+              </div>
+            </div>
 
             {/* Feedback Display */}
             {feedback && (
@@ -360,25 +380,48 @@ const MockInterview = () => {
               >
                 <div className="flex items-center justify-between mb-4">
                   <h4 className="font-bold text-white">AI Feedback</h4>
-                  <span className="text-2xl font-black text-green-400">{feedback.score}%</span>
-                </div>
-                <p className="text-slate-300 text-sm mb-4">{feedback.feedback}</p>
-                {feedback.strengths && feedback.strengths.length > 0 && (
-                  <div className="mb-3">
-                    <span className="text-xs font-bold text-green-400 uppercase">Strengths</span>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {feedback.strengths.map((s, i) => (
-                        <span key={i} className="px-2 py-1 bg-green-500/10 text-green-400 text-xs rounded-lg">{s}</span>
-                      ))}
-                    </div>
+                  <div className="flex items-center gap-3">
+                    {feedback.tone_analysis && (
+                      <span className="text-xs px-2 py-1 bg-blue-500/10 text-blue-400 rounded-lg border border-blue-500/20">
+                        {feedback.tone_analysis}
+                      </span>
+                    )}
+                    <span className="text-2xl font-black text-green-400">{feedback.score}%</span>
                   </div>
-                )}
-                {feedback.suggested_improvements && feedback.suggested_improvements.length > 0 && (
-                  <div>
-                    <span className="text-xs font-bold text-amber-400 uppercase">Suggestions</span>
+                </div>
+                
+                <p className="text-slate-300 text-sm mb-4">{feedback.feedback}</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {feedback.strengths && feedback.strengths.length > 0 && (
+                    <div className="mb-3">
+                      <span className="text-xs font-bold text-green-400 uppercase">Strengths</span>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {feedback.strengths.map((s, i) => (
+                          <span key={i} className="px-2 py-1 bg-green-500/10 text-green-400 text-xs rounded-lg">{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {feedback.suggested_improvements && feedback.suggested_improvements.length > 0 && (
+                    <div>
+                      <span className="text-xs font-bold text-amber-400 uppercase">Suggestions</span>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {feedback.suggested_improvements.map((s, i) => (
+                          <span key={i} className="px-2 py-1 bg-amber-500/10 text-amber-400 text-xs rounded-lg">{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {feedback.filler_words_detected && feedback.filler_words_detected.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-white/5">
+                    <span className="text-xs font-bold text-slate-500 uppercase">filler words detected</span>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {feedback.suggested_improvements.map((s, i) => (
-                        <span key={i} className="px-2 py-1 bg-amber-500/10 text-amber-400 text-xs rounded-lg">{s}</span>
+                      {feedback.filler_words_detected.map((w, i) => (
+                        <span key={i} className="px-2 py-1 bg-slate-800 text-slate-400 text-xs rounded-lg">{w}</span>
                       ))}
                     </div>
                   </div>
@@ -403,19 +446,30 @@ const MockInterview = () => {
                 >
                   Exit
                 </button>
-                <button 
-                  onClick={submitAnswer}
-                  disabled={!answer.trim() || loading}
-                  className="px-6 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-500 transition-all disabled:opacity-50 flex items-center gap-2"
-                >
-                  {loading ? (
-                    <RefreshCw className="animate-spin" size={18} />
-                  ) : currentQuestionIndex === questions.length - 1 ? (
-                    <>Finish <CheckCircle2 size={18} /></>
-                  ) : (
-                    <>Next Question <Send size={18} /></>
-                  )}
-                </button>
+                {showFeedback ? (
+                  <button 
+                    onClick={handleNextQuestion}
+                    className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-500 transition-all flex items-center gap-2"
+                  >
+                    {currentQuestionIndex === questions.length - 1 ? (
+                      <>Finish Interview <CheckCircle2 size={18} /></>
+                    ) : (
+                      <>Next Question <ArrowRight size={18} /></>
+                    )}
+                  </button>
+                ) : (
+                  <button 
+                    onClick={submitAnswer}
+                    disabled={!answer.trim() || loading}
+                    className="px-6 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-500 transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <RefreshCw className="animate-spin" size={18} />
+                    ) : (
+                      <>Submit Answer <Send size={18} /></>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>

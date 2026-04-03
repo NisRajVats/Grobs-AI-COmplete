@@ -138,7 +138,6 @@ async def logout(
 @router.post("/password-reset", response_model=MessageResponse)
 async def request_password_reset(
     request: PasswordResetRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
@@ -149,12 +148,8 @@ async def request_password_reset(
     """
     auth_service = AuthService(db)
     
-    # This returns token for demo purposes
-    # In production, send email with reset link
-    token = auth_service.request_password_reset(request.email)
-    
-    # TODO: Send email in background
-    # background_tasks.add_task(send_password_reset_email, request.email, token)
+    # This triggers the background email if the user exists
+    auth_service.request_password_reset(request.email)
     
     # Always return success to prevent email enumeration
     return {"message": "If the email exists, a password reset link has been sent"}

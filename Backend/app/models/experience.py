@@ -11,7 +11,7 @@ class Experience(Base):
     __tablename__ = "experience"
     
     id = Column(Integer, primary_key=True, index=True)
-    resume_id = Column(Integer, ForeignKey("resumes.id"), nullable=False)
+    resume_id = Column(Integer, ForeignKey("resumes.id"), nullable=False, index=True)
     
     # Experience details
     company = Column(String, nullable=False)

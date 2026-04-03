@@ -10,7 +10,7 @@ Uses vector similarity search instead of looping through all jobs:
 import json
 import logging
 from typing import List, Dict, Any, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 import numpy as np
 
 from app.models import Resume, ResumeContent, ResumeEmbedding, Job, JobSkill, JobEmbedding
@@ -26,7 +26,7 @@ class JobMatcher:
     def __init__(self, db: Session):
         self.db = db
     
-    def match_resume_to_jobs(
+    async def match_resume_to_jobs(
         self,
         resume_id: int,
         user_id: int,
@@ -34,72 +34,85 @@ class JobMatcher:
         min_score: float = 0.3
     ) -> List[Dict[str, Any]]:
         """
-        Match a resume to jobs using vector similarity.
-        
-        Args:
-            resume_id: ID of the resume
-            user_id: ID of the user
-            limit: Maximum number of matches
-            min_score: Minimum match score (0-1)
-            
-        Returns:
-            List of job matches with scores
+        Match a resume to jobs using optimized vector similarity.
         """
         try:
-            # Get resume embedding
-            resume_embedding = self.db.query(ResumeEmbedding).filter(
-                ResumeEmbedding.resume_id == resume_id
+            # 1. Get resume with skills and embedding in one or two efficient queries
+            # Using run_in_executor for DB query if it's large, but SQLAlchemy 1.4+ has async support.
+            # Here we just make the method async and assume DB calls are fast enough or handled by FastAPI threads if synchronous.
+            resume = self.db.query(Resume).options(
+                selectinload(Resume.skills),
+                selectinload(Resume.embedding)
+            ).filter(
+                Resume.id == resume_id,
+                Resume.user_id == user_id
             ).first()
             
-            if not resume_embedding or not resume_embedding.embedding_vector:
-                # Fallback to keyword-based matching
-                return self._keyword_match_resume_to_jobs(resume_id, user_id, limit)
+            if not resume:
+                return []
+                
+            resume_skills = set(s.name.lower() for s in resume.skills)
             
-            # Get all job embeddings
-            job_embeddings = self.db.query(JobEmbedding).filter(
+            if not resume.embedding or not resume.embedding.embedding_vector:
+                # Fallback to keyword-based matching
+                return self._keyword_match_resume_to_jobs(resume_id, user_id, limit, resume_skills)
+            
+            # 2. Get all job embeddings with their associated jobs and skills in ONE query
+            job_data = self.db.query(JobEmbedding).options(
+                joinedload(JobEmbedding.job).selectinload(Job.skills)
+            ).filter(
                 JobEmbedding.embedding_vector.isnot(None)
             ).all()
             
-            if not job_embeddings:
-                # Fallback to keyword matching
-                return self._keyword_match_resume_to_jobs(resume_id, user_id, limit)
+            if not job_data:
+                return self._keyword_match_resume_to_jobs(resume_id, user_id, limit, resume_skills)
             
-            # Calculate similarities
+            # 3. Vectorized calculations
+            resume_vec = np.array(resume.embedding.embedding_vector)
+            
             matches = []
-            resume_vec = np.array(resume_embedding.embedding_vector)
-            
-            for job_emb in job_embeddings:
+            for job_emb in job_data:
+                if not job_emb.job:
+                    continue
+                    
                 job_vec = np.array(job_emb.embedding_vector)
                 
                 # Cosine similarity
                 similarity = self._cosine_similarity(resume_vec, job_vec)
                 
                 if similarity >= min_score:
-                    job = self.db.query(Job).filter(Job.id == job_emb.job_id).first()
-                    if job:
-                        # Get missing keywords
-                        missing_keywords = self._get_missing_keywords(resume_id, job.id)
-                        
-                        matches.append({
-                            "job": {
-                                "id": job.id,
-                                "job_title": job.job_title,
-                                "company_name": job.company_name,
-                                "location": job.location,
-                                "job_type": job.job_type,
-                                "job_description": job.job_description,
-                                "job_link": job.job_link,
-                                "posted_date": job.posted_date,
-                                "source": job.source
-                            },
-                            "match_score": int(similarity * 100),
-                            "similarity": float(similarity),
-                            "missing_keywords": missing_keywords
-                        })
+                    # Missing keywords calculation using already loaded skills
+                    job = job_emb.job
+                    job_skill_names = set(s.skill_name.lower() for s in job.skills)
+                    
+                    if not job_skill_names and job.skills_required:
+                        try:
+                            skills_list = json.loads(job.skills_required)
+                            job_skill_names = set(s.lower() for s in skills_list)
+                        except:
+                            pass
+                            
+                    missing_keywords = list(job_skill_names - resume_skills)[:8]
+                    
+                    matches.append({
+                        "job": {
+                            "id": job.id,
+                            "job_title": job.job_title,
+                            "company_name": job.company_name,
+                            "location": job.location,
+                            "job_type": job.job_type,
+                            "job_description": job.job_description,
+                            "job_link": job.job_link,
+                            "posted_date": job.posted_date,
+                            "source": job.source
+                        },
+                        "match_score": int(similarity * 100),
+                        "similarity": float(similarity),
+                        "missing_keywords": missing_keywords
+                    })
             
             # Sort by score and return top N
             matches.sort(key=lambda x: x["match_score"], reverse=True)
-            
             return matches[:limit]
             
         except Exception as e:
@@ -121,41 +134,38 @@ class JobMatcher:
         self,
         resume_id: int,
         user_id: int,
-        limit: int
+        limit: int,
+        resume_skills: Optional[set] = None
     ) -> List[Dict[str, Any]]:
         """
         Fallback: Keyword-based job matching when embeddings unavailable.
+        Optimized to avoid N+1 queries.
         """
-        # Get resume skills
-        resume = self.db.query(Resume).filter(
-            Resume.id == resume_id,
-            Resume.user_id == user_id
-        ).first()
+        if resume_skills is None:
+            resume = self.db.query(Resume).options(
+                selectinload(Resume.skills)
+            ).filter(
+                Resume.id == resume_id,
+                Resume.user_id == user_id
+            ).first()
+            
+            if not resume:
+                return []
+            resume_skills = set(s.name.lower() for s in resume.skills)
         
-        if not resume:
-            return []
-        
-        resume_skills = set(s.name.lower() for s in resume.skills)
-        
-        # Get all jobs with their skills
-        jobs = self.db.query(Job).all()
+        # Get all jobs with their skills in ONE query
+        jobs = self.db.query(Job).options(
+            selectinload(Job.skills)
+        ).all()
         
         matches = []
-        
         for job in jobs:
-            # Get job skills
-            job_skills = self.db.query(JobSkill).filter(
-                JobSkill.job_id == job.id
-            ).all()
+            job_skill_names = set(s.skill_name.lower() for s in job.skills)
             
-            job_skill_names = set(s.skill_name.lower() for s in job_skills)
-            
-            if not job_skill_names:
-                # Use legacy skills_required field
+            if not job_skill_names and job.skills_required:
                 try:
-                    if job.skills_required:
-                        skills = json.loads(job.skills_required)
-                        job_skill_names = set(s.lower() for s in skills)
+                    skills_list = json.loads(job.skills_required)
+                    job_skill_names = set(s.lower() for s in skills_list)
                 except:
                     pass
             
@@ -170,10 +180,10 @@ class JobMatcher:
             else:
                 score = 0
             
-            # Get missing keywords
-            missing = list(job_skill_names - resume_skills)[:8]
-            
             if score >= 0.1:
+                # Find missing keywords
+                missing = list(job_skill_names - resume_skills)[:8]
+                
                 matches.append({
                     "job": {
                         "id": job.id,
@@ -193,7 +203,6 @@ class JobMatcher:
         
         # Sort by score
         matches.sort(key=lambda x: x["match_score"], reverse=True)
-        
         return matches[:limit]
     
     def _get_missing_keywords(self, resume_id: int, job_id: int) -> List[str]:
@@ -217,7 +226,7 @@ class JobMatcher:
         
         return missing[:8]
     
-    def generate_job_embedding(self, job_id: int) -> Dict[str, Any]:
+    async def generate_job_embedding(self, job_id: int) -> Dict[str, Any]:
         """
         Generate and store embedding for a job.
         
@@ -238,8 +247,8 @@ class JobMatcher:
             # Build job text
             job_text = self._build_job_text(job)
             
-            # Generate embedding
-            embeddings = llm_service.generate_embeddings(job_text)
+            # Generate embedding asynchronously
+            embeddings = await llm_service.generate_embeddings_async(job_text)
             
             if not embeddings:
                 return {"success": False, "error": "Failed to generate embedding"}

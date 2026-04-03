@@ -6,14 +6,14 @@ import json
 import logging
 import os   
 from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from datetime import datetime
 
 from app.core.config import settings
 from app.models import Resume, ResumeVersion, Education, Experience, Project, Skill, ResumeAnalysis
 from app.models.user import User
 from app.utils.encryption import encrypt, decrypt
-from app.services.resume_service.parser import parse_resume
+from app.services.resume_service.parser import parse_resume_async
 from app.services.resume_service.ats_analyzer import calculate_ats_score
 from app.integrations.cloud_storage import cloud_storage_service as storage_service
 
@@ -88,16 +88,26 @@ class ResumeManager:
         return db_resume
     
     def get_user_resumes(self, user_id: int) -> List[Resume]:
-        """Get all resumes for a user."""
-        resumes = self.db.query(Resume).filter(
+        """Get all resumes for a user with optimized loading."""
+        resumes = self.db.query(Resume).options(
+            selectinload(Resume.versions),
+            selectinload(Resume.analyses)
+        ).filter(
             Resume.user_id == user_id
         ).all()
         
         return resumes
     
     def get_resume(self, resume_id: int, user_id: int) -> Optional[Resume]:
-        """Get a single resume by ID, ensuring ownership."""
-        resume = self.db.query(Resume).filter(
+        """Get a single resume by ID with eager loading for performance."""
+        resume = self.db.query(Resume).options(
+            selectinload(Resume.education),
+            selectinload(Resume.experience),
+            selectinload(Resume.projects),
+            selectinload(Resume.skills),
+            selectinload(Resume.versions),
+            selectinload(Resume.analyses)
+        ).filter(
             Resume.id == resume_id,
             Resume.user_id == user_id
         ).first()
@@ -199,24 +209,52 @@ class ResumeManager:
         self.db.commit()
         
         return True
+
+    def bulk_delete(self, resume_ids: List[int], user_id: int) -> Dict[str, int]:
+        """
+        Bulk delete multiple resumes for a user.
+        Handles cascading deletes safely (files, versions, analyses, nested data).
+        
+        Returns:
+            Dict with 'deleted' count and 'failed' count
+        """
+        deleted_count = 0
+        failed_count = 0
+        
+        for resume_id in resume_ids:
+            try:
+                if self.delete_resume(resume_id, user_id):
+                    deleted_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+        
+        return {"deleted": deleted_count, "failed": failed_count}
     
     # ==================== Resume Actions ====================
     
-    def parse_resume_file(self, resume_id: int, user_id: int) -> Optional[Dict]:
+    async def parse_resume_file(self, resume_id: int, user_id: int) -> Optional[Dict]:
         """Parse a resume PDF file and extract data."""
         resume = self.get_resume(resume_id, user_id)
         if not resume or not resume.file_path:
+            logger.warning(f"No file_path for resume {resume_id}")
+            return None
+        
+        # Robust path resolution for local storage
+        full_path = resume.file_path
+        if settings.STORAGE_PROVIDER == "local":
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            full_path = os.path.join(base_dir, "uploads", full_path.lstrip("uploads/").lstrip("/"))
+        
+        logger.info(f"Parsing resume {resume_id} from path: {full_path}")
+        
+        if not os.path.exists(full_path):
+            logger.error(f"File not found: {full_path}")
             return None
         
         try:
-            # Get full path for local storage
-            full_path = resume.file_path
-            if settings.STORAGE_PROVIDER == "local" and full_path:
-                # Use absolute path from project root
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                full_path = os.path.join(base_dir, "uploads", full_path)
-            
-            parsed_data = parse_resume(full_path)
+            parsed_data = await parse_resume_async(full_path)
             
             # Update resume with parsed data
             resume.parsed_data = json.dumps(parsed_data)
@@ -231,12 +269,13 @@ class ResumeManager:
             
             self.db.commit()
             
+            logger.info(f"Successfully parsed resume {resume_id}")
             return parsed_data
         except Exception as e:
-            logger.error(f"Error parsing resume: {e}")
+            logger.error(f"Error parsing resume {resume_id}: {e}")
             return None
     
-    def get_ats_score(
+    async def get_ats_score(
         self,
         resume_id: int,
         user_id: int,
@@ -247,22 +286,34 @@ class ResumeManager:
         if not resume:
             return None
         
-        # ATS analysis is now independent of job_description as per user request
-        # We focus on general professional standards and target role
-        ats_result = calculate_ats_score(resume)
+        # ATS analysis focused on professional standards and target role
+        ats_result = await calculate_ats_score(resume, job_description=job_description)
+        
+        # Prepare feedback dictionary including new metrics
+        feedback_dict = {
+            "category_scores": ats_result.get("category_scores", {}),
+            "skill_analysis": ats_result.get("skill_analysis", {}),
+            "keyword_gap": ats_result.get("keyword_gap", {}),
+            "industry_tips": ats_result.get("industry_tips", []),
+            "llm_powered": ats_result.get("llm_powered", False)
+        }
         
         # Save analysis
         analysis = ResumeAnalysis(
             resume_id=resume.id,
             analysis_type="ats",
             score=ats_result["overall_score"],
-            feedback=json.dumps(ats_result),
+            feedback=json.dumps(feedback_dict),
+            missing_keywords=json.dumps(ats_result.get("issues", [])),
+            suggestions=json.dumps(ats_result.get("recommendations", [])),
+            job_description=job_description if job_description else None,
             created_at=datetime.now()
         )
         self.db.add(analysis)
         
         # Update resume with score
         resume.ats_score = ats_result["overall_score"]
+        resume.analysis_score = ats_result["overall_score"]
         self.db.commit()
         
         return ats_result

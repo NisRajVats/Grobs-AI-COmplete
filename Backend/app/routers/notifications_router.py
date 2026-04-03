@@ -79,17 +79,21 @@ async def delete_notification(
     db: Session = Depends(get_db)
 ):
     """Delete a notification."""
+    # First check if notification exists at all (for better error messaging)
     notification = db.query(Notification).filter(
-        Notification.id == notification_id,
-        Notification.user_id == current_user.id
+        Notification.id == notification_id
     ).first()
     
     if not notification:
-        raise HTTPException(status_code=404, detail="Notification not found")
+        raise HTTPException(status_code=404, detail=f"Notification with id {notification_id} not found")
+    
+    # Check if the notification belongs to the current user
+    if notification.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to delete this notification")
     
     db.delete(notification)
     db.commit()
-    return {"message": "Notification deleted"}
+    return {"message": "Notification deleted successfully", "id": notification_id}
 
 
 def create_notification(db: Session, user_id: int, title: str, message: str, 

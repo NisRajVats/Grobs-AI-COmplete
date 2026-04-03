@@ -18,8 +18,13 @@ if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
         connect_args={"check_same_thread": False}
     )
 else:
-    # Use pool_pre_ping=True for PostgreSQL/production
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+    # Use pool settings for PostgreSQL/production
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL, 
+        pool_pre_ping=True,
+        pool_size=settings.DATABASE_POOL_SIZE,
+        max_overflow=settings.DATABASE_MAX_OVERFLOW
+    )
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

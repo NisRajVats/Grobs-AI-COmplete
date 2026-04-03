@@ -27,12 +27,25 @@ const ResumeUpload = () => {
 
     try {
       const response = await resumeAPI.uploadResume(file, file.name, null);
+      const resumeId = response.data.id;
       
-      setUploadedResume({
-        id: response.data.resume_id,
-        filename: file.name,
-        status: 'uploaded'
-      });
+      // Run full pipeline in background
+      try {
+        const pipelineRes = await resumeAPI.processResumePipeline(resumeId);
+        setUploadedResume({
+          id: resumeId,
+          filename: file.name,
+          status: 'processed',
+          parsed_data: pipelineRes.data.parsed_data
+        });
+      } catch (pipelineErr) {
+        console.error("Pipeline error:", pipelineErr);
+        setUploadedResume({
+          id: resumeId,
+          filename: file.name,
+          status: 'uploaded'
+        });
+      }
     } catch (err) {
       console.error("Upload error:", err);
       setError(err.response?.data?.detail || 'Failed to upload resume. Please try again.');

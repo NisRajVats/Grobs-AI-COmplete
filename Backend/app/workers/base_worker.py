@@ -7,8 +7,20 @@ Supports both Celery and FastAPI BackgroundTasks.
 import logging
 from typing import Optional, Any, Dict, Callable
 from functools import wraps
-from celery import Task
-from celery.exceptions import MaxRetriesExceededError
+try:
+    from celery import Task
+    from celery.exceptions import MaxRetriesExceededError
+    CELERY_AVAILABLE = True
+except ImportError:
+    class Task:
+        def __init__(self, *args, **kwargs): pass
+        def on_failure(self, *args, **kwargs): pass
+        def on_retry(self, *args, **kwargs): pass
+        def on_success(self, *args, **kwargs): pass
+    
+    class MaxRetriesExceededError(Exception):
+        pass
+    CELERY_AVAILABLE = False
 
 from app.core.logging import get_logger
 
@@ -181,8 +193,15 @@ def get_celery_config() -> Dict[str, Any]:
     Returns:
         Celery configuration dictionary
     """
+    if not CELERY_AVAILABLE:
+        return {}
+
     from app.core.config import settings
-    from kombu import Queue
+    try:
+        from kombu import Queue
+    except ImportError:
+        logger.warning("Kombu not found, Celery configuration will be incomplete")
+        return {}
     
     return {
         "broker_url": settings.CELERY_BROKER_URL,
@@ -232,6 +251,10 @@ def create_celery_app():
     Returns:
         Configured Celery app
     """
+    if not CELERY_AVAILABLE:
+        logger.warning("Celery not available, background tasks will not be available")
+        return None
+        
     from celery import Celery
     
     app = Celery("grobsai")
@@ -254,6 +277,9 @@ def enqueue_task(
     """
     Enqueue a task to Celery.
     
+    If Celery is not available or connection fails, 
+    falls back to synchronous execution in development/testing environments.
+    
     Args:
         task_name: Full task name (e.g., "app.workers.parse_resume")
         priority: Optional queue name (high, default, low)
@@ -261,10 +287,18 @@ def enqueue_task(
         **kwargs: Task keyword arguments
         
     Returns:
-        Task ID or None if Celery not available
+        Task ID or None if Celery not available (executed sync)
     """
+    if not CELERY_AVAILABLE:
+        logger.warning(f"Celery not available, falling back to sync execution for {task_name}.")
+        return _execute_sync(task_name, *args, **kwargs)
+
     try:
         from celery import current_app
+        # Check if broker is reachable
+        with current_app.connection() as conn:
+            conn.ensure_connection(max_retries=1)
+            
         send_kwargs = {"args": args, "kwargs": kwargs}
         if priority:
             send_kwargs["queue"] = priority
@@ -272,7 +306,29 @@ def enqueue_task(
         result = current_app.send_task(task_name, **send_kwargs)
         return result.id
     except Exception as e:
-        logger.warning(f"Failed to enqueue task: {e}")
+        logger.warning(f"Failed to enqueue task to Celery: {e}. Falling back to sync execution.")
+        return _execute_sync(task_name, *args, **kwargs)
+
+
+def _execute_sync(task_name: str, *args, **kwargs) -> Optional[str]:
+    """Fallback to synchronous execution."""
+    try:
+        # Dynamically import the worker module and call the function
+        module_name, func_name = task_name.rsplit('.', 1)
+        import importlib
+        # Adjust module name to match actual path if needed
+        # In our case "email_worker.process" -> "app.workers.email_worker.process"
+        if not module_name.startswith('app.workers.'):
+            full_module_name = f"app.workers.{module_name}"
+        else:
+            full_module_name = module_name
+            
+        module = importlib.import_module(full_module_name)
+        func = getattr(module, func_name)
+        func(*args, **kwargs)
+        return "sync_execution"
+    except Exception as sync_e:
+        logger.error(f"Failed to execute task synchronously: {sync_e}")
         return None
 
 
@@ -286,6 +342,14 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
     Returns:
         Task status dictionary
     """
+    if not CELERY_AVAILABLE:
+        return {
+            "id": task_id,
+            "status": "COMPLETED" if task_id == "sync_execution" else "UNKNOWN",
+            "ready": True if task_id == "sync_execution" else False,
+            "successful": True if task_id == "sync_execution" else None
+        }
+
     try:
         from celery import current_app
         result = current_app.AsyncResult(task_id)

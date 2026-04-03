@@ -22,6 +22,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { calendarAPI } from '../../services/api';
 
 const CalendarView = () => {
   const [events, setEvents] = useState([]);
@@ -29,36 +30,54 @@ const CalendarView = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [viewMode, setViewMode] = useState('month'); // 'month', 'week', 'day'
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchEvents();
   }, []);
 
   const fetchEvents = async () => {
-    // Calendar uses in-session state - events added via the + button persist during session
-    setEvents([]);
+    try {
+      setLoading(true);
+      const response = await calendarAPI.getEvents();
+      setEvents(response.data);
+    } catch (error) {
+      console.error('Failed to fetch events:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const addEvent = async (eventData) => {
-    const newEvent = {
-      ...eventData,
-      id: Date.now(),
-      status: 'scheduled'
-    };
-    setEvents([...events, newEvent]);
-    setShowModal(false);
+    try {
+      const response = await calendarAPI.createEvent(eventData);
+      setEvents([...events, response.data]);
+      setShowModal(false);
+    } catch (error) {
+      console.error('Failed to add event:', error);
+    }
   };
 
   const deleteEvent = async (eventId) => {
-    setEvents(events.filter(event => event.id !== eventId));
+    try {
+      await calendarAPI.deleteEvent(eventId);
+      setEvents(events.filter(event => event.id !== eventId));
+    } catch (error) {
+      console.error('Failed to delete event:', error);
+    }
   };
 
   const updateEvent = async (eventId, updates) => {
-    setEvents(events.map(event => 
-      event.id === eventId ? { ...event, ...updates } : event
-    ));
-    setEditingEvent(null);
-    setShowModal(false);
+    try {
+      const response = await calendarAPI.updateEvent(eventId, updates);
+      setEvents(events.map(event => 
+        event.id === eventId ? response.data : event
+      ));
+      setEditingEvent(null);
+      setShowModal(false);
+    } catch (error) {
+      console.error('Failed to update event:', error);
+    }
   };
 
   const getEventsForDate = (date) => {

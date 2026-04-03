@@ -30,6 +30,7 @@ from app.models import Resume, ResumeContent, ResumeAnalysis, ResumeEmbedding, R
 from app.utils.encryption import encrypt, decrypt
 from app.services.resume_service.parser import parse_resume as parse_resume_file
 from app.services.resume_service.ats_analyzer import calculate_ats_score as calculate_ats
+from app.services.resume_service.optimizer import ResumeOptimizer
 from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class ResumePipelineService:
     
     # ==================== Pipeline Stages ====================
     
-    def process_resume_upload(
+    async def process_resume_upload(
         self,
         resume_id: int,
         file_path: str,
@@ -86,7 +87,7 @@ class ResumePipelineService:
                 results["errors"].append(f"Embedding failed: {embed_result.get('error')}")
             
             # Stage 3: Run ATS Analysis
-            ats_result = self.run_ats_analysis(resume_id, user_id)
+            ats_result = await self.run_ats_analysis(resume_id, user_id)
             if ats_result.get("success"):
                 results["stages_completed"].append("ats_analysis")
             else:
@@ -254,7 +255,7 @@ class ResumePipelineService:
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
-    def run_ats_analysis(
+    async def run_ats_analysis(
         self,
         resume_id: int,
         user_id: int,
@@ -293,14 +294,23 @@ class ResumePipelineService:
             resume_for_ats = self._build_resume_for_ats(resume, content)
             
             # Calculate ATS score
-            ats_result = calculate_ats(resume_for_ats, job_description)
+            ats_result = await calculate_ats(resume_for_ats, job_description=job_description)
+            
+            # Prepare feedback dictionary including new metrics
+            feedback_dict = {
+                "category_scores": ats_result.get("category_scores", {}),
+                "skill_analysis": ats_result.get("skill_analysis", {}),
+                "keyword_gap": ats_result.get("keyword_gap", {}),
+                "industry_tips": ats_result.get("industry_tips", []),
+                "llm_powered": ats_result.get("llm_powered", False)
+            }
             
             # Store analysis result
             analysis = ResumeAnalysis(
                 resume_id=resume_id,
                 analysis_type="ats",
                 score=ats_result.get("overall_score"),
-                feedback=json.dumps(ats_result.get("category_scores", {})),
+                feedback=json.dumps(feedback_dict),
                 missing_keywords=json.dumps(ats_result.get("issues", [])),
                 suggestions=json.dumps(ats_result.get("recommendations", [])),
                 job_description=job_description if job_description else None
@@ -309,6 +319,8 @@ class ResumePipelineService:
             self.db.add(analysis)
             
             # Update resume with score
+            resume.ats_score = ats_result.get("overall_score")
+            resume.analysis_score = ats_result.get("overall_score")
             resume.status = "analyzed"
             resume.updated_at = datetime.utcnow()
             
@@ -326,7 +338,7 @@ class ResumePipelineService:
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
-    def optimize_resume(
+    async def optimize_resume(
         self,
         resume_id: int,
         user_id: int,
@@ -344,64 +356,35 @@ class ResumePipelineService:
             Optimization result
         """
         try:
-            # Get resume content
-            resume = self.db.query(Resume).filter(
-                Resume.id == resume_id,
-                Resume.user_id == user_id
-            ).first()
-            
-            if not resume:
-                return {"success": False, "error": "Resume not found"}
-            
-            content = self.db.query(ResumeContent).filter(
-                ResumeContent.resume_id == resume_id
-            ).first()
-            
-            if not content:
-                return {"success": False, "error": "Resume not parsed yet"}
-            
-            # Build prompt for optimization
-            prompt = self._build_optimization_prompt(resume, content, job_description)
-            
-            # Get optimization from LLM
-            response = llm_service.generate_structured_output(
-                prompt=prompt,
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "optimized_summary": {"type": "string"},
-                        "improved_skills": {"type": "array", "items": {"type": "string"}},
-                        "suggestions": {"type": "array", "items": {"type": "string"}}
-                    }
-                }
-            )
-            
-            # Create optimized version
-            version = ResumeVersion(
+            # Use the specialized ResumeOptimizer for Stage 4
+            optimizer = ResumeOptimizer(self.db)
+            result = await optimizer.optimize_resume(
                 resume_id=resume_id,
-                version_number=self._get_next_version_number(resume_id),
-                version_label="AI Optimized",
-                optimized_flag=True,
-                parsed_data=json.dumps(response)
+                user_id=user_id,
+                job_description=job_description,
+                optimization_type="comprehensive"
             )
             
-            self.db.add(version)
+            if not result.get("success"):
+                return {"success": False, "error": result.get("error")}
             
-            # Update resume status
-            resume.status = "optimized"
-            resume.updated_at = datetime.utcnow()
+            # Update resume status to optimized
+            resume = self.db.query(Resume).filter(Resume.id == resume_id).first()
+            if resume:
+                resume.status = "optimized"
+                self.db.commit()
             
-            self.db.commit()
-            
-            logger.info(f"Successfully optimized resume {resume_id}")
+            logger.info(f"Successfully optimized resume {resume_id} through pipeline")
             
             return {
                 "success": True,
-                "optimization": response
+                "optimization": result.get("optimized_resume"),
+                "suggestions": result.get("suggestions"),
+                "ats_score": result.get("ats_score")
             }
             
         except Exception as e:
-            logger.error(f"Error optimizing resume {resume_id}: {e}")
+            logger.error(f"Error in pipeline resume optimization {resume_id}: {e}")
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
@@ -473,19 +456,33 @@ class ResumePipelineService:
     
     def _build_resume_for_ats(self, resume: Resume, content: ResumeContent) -> Any:
         """Build resume object compatible with ATS analyzer."""
+        # Extract summary from parsed_json
+        summary = ""
+        if content.parsed_json and isinstance(content.parsed_json, dict):
+            summary = content.parsed_json.get("summary", "")
+        elif resume.parsed_data:
+            try:
+                pd = json.loads(resume.parsed_data)
+                summary = pd.get("summary", "")
+            except:
+                pass
+                
         # Create a simple object with required attributes
         class ResumeForATS:
-            def __init__(self, resume, content):
+            def __init__(self, resume, content, summary):
                 self.full_name = decrypt(content.full_name_encrypted) if content.full_name_encrypted else ""
                 self.email = decrypt(content.email_encrypted) if content.email_encrypted else ""
                 self.phone = decrypt(content.phone_encrypted) if content.phone_encrypted else ""
                 self.linkedin_url = decrypt(content.linkedin_url_encrypted) if content.linkedin_url_encrypted else ""
+                self.title = resume.title
+                self.target_role = resume.target_role
+                self.summary = summary
                 self.education = resume.education
                 self.experience = resume.experience
                 self.projects = resume.projects
                 self.skills = resume.skills
         
-        return ResumeForATS(resume, content)
+        return ResumeForATS(resume, content, summary)
     
     def _build_optimization_prompt(
         self,

@@ -101,19 +101,23 @@ export const resumeAPI = {
   createResume: (data) => api.post('/api/resumes', data),
   updateResume: (id, data) => api.put(`/api/resumes/${id}`, data),
   deleteResume: (id) => api.delete(`/api/resumes/${id}`),
+  deleteResumes: (ids) => api.post('/api/resumes/bulk-delete', { ids }),
   uploadResume: (file, title, targetRole) => {
     const formData = new FormData();
     formData.append('file', file);
     if (title) formData.append('title', title);
     if (targetRole) formData.append('target_role', targetRole);
     return api.post('/api/resumes/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
     });
   },
   parseResume: (id) => api.post(`/api/resumes/${id}/parse`),
   getAtsScore: (id, jobDescription) => api.post(`/api/resumes/${id}/ats-score`, { job_description: jobDescription }),
   getJobRecommendations: (id, limit = 10) => api.get(`/api/resumes/${id}/job-recommendations?limit=${limit}`),
   getResumeVersions: (id) => api.get(`/api/resumes/${id}/versions`),
+  downloadResume: (id) => api.get(`/api/resumes/${id}/download`, { responseType: 'blob' }),
   getResumePreview: (id) => api.get(`/api/resumes/${id}/preview`),
   processResumePipeline: (id) => api.post(`/api/resumes/${id}/process-pipeline`),
   atsCheck: (id, jobDescription) => api.post(`/api/resumes/${id}/ats-check`, { job_description: jobDescription }),
@@ -182,6 +186,19 @@ export const notificationsAPI = {
   markAsRead: (id) => api.put(`/api/notifications/${id}/read`),
   markAllAsRead: () => api.put('/api/notifications/read-all'),
   deleteNotification: (id) => api.delete(`/api/notifications/${id}`),
+};
+
+// Admin API calls
+export const adminAPI = {
+  getStats: () => api.get('/api/admin/stats'),
+};
+
+// Calendar API calls
+export const calendarAPI = {
+  getEvents: () => api.get('/api/calendar/events'),
+  createEvent: (data) => api.post('/api/calendar/events', data),
+  updateEvent: (id, data) => api.put(`/api/calendar/events/${id}`, data),
+  deleteEvent: (id) => api.delete(`/api/calendar/events/${id}`),
 };
 
 export default api;

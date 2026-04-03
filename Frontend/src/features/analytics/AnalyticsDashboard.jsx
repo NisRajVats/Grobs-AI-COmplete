@@ -31,7 +31,8 @@ import {
   Download,
   Share2,
   Filter,
-  ChevronDown
+  ChevronDown,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../services/api';
@@ -210,7 +211,7 @@ const AnalyticsDashboard = () => {
               </span>
             </div>
           </div>
-          <div className="h-[300px] w-full">
+          <div className="h-75 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={analyticsData?.keyMetrics.applicationTrend || []}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
@@ -244,7 +245,7 @@ const AnalyticsDashboard = () => {
               </span>
             </div>
           </div>
-          <div className="h-[300px] w-full">
+          <div className="h-75 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={analyticsData?.keyMetrics.resumePerformance || []}>
                 <defs>
@@ -282,7 +283,7 @@ const AnalyticsDashboard = () => {
           className="card-glass p-6 border-white/5"
         >
           <h3 className="text-lg font-bold text-white mb-6">Application Status</h3>
-          <div className="h-[300px] w-full flex items-center justify-center">
+          <div className="h-75 w-full flex items-center justify-center">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -397,46 +398,51 @@ const AnalyticsDashboard = () => {
       >
         <h3 className="text-xl font-bold text-white mb-6">AI Insights & Recommendations</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="p-6 bg-gradient-to-br from-blue-600/10 to-blue-800/10 border border-blue-500/20 rounded-xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-blue-600/20 rounded-lg">
-                <TrendingUp size={20} className="text-blue-400" />
-              </div>
-              <h4 className="font-bold text-white">Application Strategy</h4>
+          {(analyticsData?.keyMetrics.aiInsights || []).length > 0 ? (
+            (analyticsData?.keyMetrics.aiInsights || []).map((insight, idx) => {
+              const colors = {
+                success: 'from-green-600/10 to-green-800/10 border-green-500/20',
+                warning: 'from-amber-600/10 to-amber-800/10 border-amber-500/20',
+                info: 'from-blue-600/10 to-blue-800/10 border-blue-500/20',
+                tip: 'from-purple-600/10 to-purple-800/10 border-purple-500/20'
+              };
+              const iconColors = {
+                success: 'bg-green-600/20 text-green-400',
+                warning: 'bg-amber-600/20 text-amber-400',
+                info: 'bg-blue-600/20 text-blue-400',
+                tip: 'bg-purple-600/20 text-purple-400'
+              };
+              const Icons = {
+                success: CheckCircle,
+                warning: AlertTriangle,
+                info: Eye,
+                tip: Target
+              };
+              
+              const type = insight.type || 'info';
+              const Icon = Icons[type] || Icons.info;
+              
+              return (
+                <div key={idx} className={`p-6 bg-linear-to-br ${colors[type] || colors.info} border rounded-xl`}>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className={`p-2 rounded-lg ${iconColors[type] || iconColors.info}`}>
+                      <Icon size={20} />
+                    </div>
+                    <h4 className="font-bold text-white capitalize">{type}</h4>
+                  </div>
+                  <p className="text-sm text-slate-300 mb-4">{insight.message}</p>
+                  <button className={`text-sm font-bold ${iconColors[type].split(' ')[1]} hover:opacity-80`}>
+                    {insight.action}
+                  </button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="col-span-3 p-12 text-center bg-white/5 rounded-2xl border border-white/10">
+              <Sparkles className="mx-auto text-slate-500 mb-4" size={32} />
+              <p className="text-slate-400 italic">Complete more applications and optimize your resume to receive AI-powered insights!</p>
             </div>
-            <p className="text-sm text-slate-300 mb-4">
-              Your application rate increased by 25% this month. Focus on quality over quantity - 
-              your interview rate is excellent at 28%.
-            </p>
-            <button className="text-sm text-blue-400 hover:text-blue-300 font-bold">Optimize Strategy</button>
-          </div>
-
-          <div className="p-6 bg-gradient-to-br from-green-600/10 to-green-800/10 border border-green-500/20 rounded-xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-green-600/20 rounded-lg">
-                <CheckCircle size={20} className="text-green-400" />
-              </div>
-              <h4 className="font-bold text-white">Resume Optimization</h4>
-            </div>
-            <p className="text-sm text-slate-300 mb-4">
-              Your resume score improved by 12% after recent updates. Consider adding more 
-              quantifiable achievements.
-            </p>
-            <button className="text-sm text-green-400 hover:text-green-300 font-bold">Analyze Resume</button>
-          </div>
-
-          <div className="p-6 bg-gradient-to-br from-amber-600/10 to-amber-800/10 border border-amber-500/20 rounded-xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-amber-600/20 rounded-lg">
-                <AlertTriangle size={20} className="text-amber-400" />
-              </div>
-              <h4 className="font-bold text-white">Skill Development</h4>
-            </div>
-            <p className="text-sm text-slate-300 mb-4">
-              Docker and AWS skills need attention. These are frequently requested in your target roles.
-            </p>
-            <button className="text-sm text-amber-400 hover:text-amber-300 font-bold">Learn Skills</button>
-          </div>
+          )}
         </div>
       </motion.div>
     </div>

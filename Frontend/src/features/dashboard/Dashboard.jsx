@@ -67,7 +67,7 @@ const Dashboard = () => {
     }
   };
 
-  const mainSections = [
+  const mainSections = React.useMemo(() => [
     {
       id: 'resume',
       icon: FileText,
@@ -104,7 +104,14 @@ const Dashboard = () => {
       color: 'from-purple-600 to-purple-700',
       bgPattern: 'bg-purple-600/10'
     }
-  ];
+  ], []);
+
+  const statsData = React.useMemo(() => [
+    { label: 'Total Resumes', value: stats?.total_resumes || 0, icon: FileText, color: 'text-orange-400', bg: 'bg-orange-400/10' },
+    { label: 'Avg. ATS Score', value: `${Math.round(stats?.avg_ats_score || 0)}%`, icon: Target, color: 'text-blue-400', bg: 'bg-blue-400/10' },
+    { label: 'Applications', value: stats?.total_applications || 0, icon: Briefcase, color: 'text-rose-400', bg: 'bg-rose-400/10' },
+    { label: 'Saved Jobs', value: stats?.total_saved_jobs || 0, icon: Sparkles, color: 'text-teal-400', bg: 'bg-teal-400/10' },
+  ], [stats]);
 
   if (loading) {
     return (
@@ -113,13 +120,6 @@ const Dashboard = () => {
       </div>
     );
   }
-
-  const statsData = [
-    { label: 'Total Resumes', value: stats?.total_resumes || 0, icon: FileText, color: 'text-orange-400', bg: 'bg-orange-400/10' },
-    { label: 'Avg. ATS Score', value: `${Math.round(stats?.avg_ats_score || 0)}%`, icon: Target, color: 'text-blue-400', bg: 'bg-blue-400/10' },
-    { label: 'Applications', value: stats?.total_applications || 0, icon: Briefcase, color: 'text-rose-400', bg: 'bg-rose-400/10' },
-    { label: 'Saved Jobs', value: stats?.total_saved_jobs || 0, icon: Sparkles, color: 'text-teal-400', bg: 'bg-teal-400/10' },
-  ];
 
   return (
     <div className="space-y-8">

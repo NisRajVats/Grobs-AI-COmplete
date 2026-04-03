@@ -3,6 +3,7 @@ Resume router for managing resumes.
 Includes multi-resume support and all resume actions.
 """
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -11,9 +12,11 @@ from typing import List, Optional, Any
 from app.database.session import get_db
 from app.models import User, Resume, ResumeVersion, Notification
 from app.utils.dependencies import get_current_user
+from app.utils.cache import cache_response
 from app.services.resume_service.resume_manager import ResumeManager
 from app.services.resume_service.optimizer import ResumeOptimizer
 from app.services.job_service.job_matcher import JobMatcher
+from app.services.resume_service.resume_pipeline import ResumePipelineService
 from app.schemas.resume import (
     ResumeCreate,
     ResumeUpdate,
@@ -22,14 +25,19 @@ from app.schemas.resume import (
     ATSScoreRequest,
     OptimizeResumeRequest,
     OptimizeResumeResponse,
-    ResumeVersionResponse
+    ResumeVersionResponse,
+    BulkDeleteRequest,
+    BulkDeleteResponse
 )
+from app.utils.cache import cache_instance
 from app.schemas.job import (
     JobMatchResponse,
     JobRecommendationResponse
 )
 
 from app.integrations.cloud_storage import cloud_storage_service
+
+from app.workers.resume_worker import process_resume_parsing, process_ats_analysis
 
 # Backward compatibility alias
 JobRecommender = JobMatcher
@@ -40,6 +48,7 @@ router = APIRouter(prefix="/api/resumes", tags=["Resumes"])
 # ==================== Endpoints ====================
 
 @router.get("", response_model=List[ResumeResponse])
+@cache_response(ttl=60)
 async def get_resumes(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -62,10 +71,14 @@ async def create_resume(
         user=current_user,
         resume_data=resume_data.dict()
     )
+    
+    # Clear cache for get_resumes
+    cache_instance.clear()
+    
     return resume
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=ResumeDetailResponse)
 async def upload_resume(
     file: UploadFile = File(...),
     title: Optional[str] = None,
@@ -73,7 +86,7 @@ async def upload_resume(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload a resume PDF file."""
+    """Upload a resume PDF file and parse immediately."""
     try:
         # Read file content
         file_content = await file.read()
@@ -93,37 +106,45 @@ async def upload_resume(
             filename=file.filename
         )
         
-        # Parse the resume in background
-        try:
-            manager.parse_resume_file(resume.id, current_user.id)
-        except Exception as e:
-            print(f"Error parsing resume: {e}")
+        # IMMEDIATELY parse (sync) - populate parsed_data + nested tables
+        await manager.parse_resume_file(resume.id, current_user.id)
+        
+        # Refresh with eager loading to ensure relationships are loaded
+        from sqlalchemy.orm import selectinload
+        resume = db.query(Resume).options(
+            selectinload(Resume.education),
+            selectinload(Resume.experience),
+            selectinload(Resume.projects),
+            selectinload(Resume.skills),
+            selectinload(Resume.versions),
+            selectinload(Resume.analyses)
+        ).filter(Resume.id == resume.id).first()
         
         # Create notification
         try:
             notif = Notification(
                 user_id=current_user.id,
-                title="Resume Uploaded",
-                message=f"'{title or file.filename}' has been uploaded and is being processed.",
-                type="info",
-                action_url="/app/resumes"
+                title="Resume Parsed",
+                message=f"'{title or file.filename}' successfully parsed and loaded!",
+                type="success",
+                action_url=f"/app/resumes/{resume.id}"
             )
             db.add(notif)
             db.commit()
         except Exception:
             pass
         
-        return {"message": "Resume uploaded successfully", "resume_id": resume.id}
+        # Return FULL response with parsed_data for frontend
+        return ResumeDetailResponse.from_orm(resume)
     
     except ValueError as e:
-        # Handle storage/upload errors (like S3 failures)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        # Handle any other errors
         raise HTTPException(status_code=500, detail=f"Error uploading resume: {str(e)}")
 
 
 @router.get("/{resume_id}", response_model=ResumeDetailResponse)
+@cache_response(ttl=60)
 async def get_resume(
     resume_id: int,
     current_user: User = Depends(get_current_user),
@@ -184,7 +205,7 @@ async def parse_resume(
 ):
     """Parse a resume PDF and extract data."""
     manager = ResumeManager(db)
-    result = manager.parse_resume_file(resume_id, current_user.id)
+    result = await manager.parse_resume_file(resume_id, current_user.id)
     
     if not result:
         raise HTTPException(status_code=400, detail="Could not parse resume")
@@ -206,7 +227,7 @@ async def get_ats_score(
         raise HTTPException(status_code=404, detail="Resume not found")
         
     job_description = request.job_description if request else ""
-    result = manager.get_ats_score(resume_id, current_user.id, job_description)
+    result = await manager.get_ats_score(resume_id, current_user.id, job_description)
     
     if not result:
         raise HTTPException(status_code=400, detail="Could not calculate ATS score")
@@ -239,7 +260,7 @@ async def match_jobs(
         raise HTTPException(status_code=404, detail="Resume not found")
         
     recommender = JobRecommender(db)
-    matches = recommender.match_resume_to_jobs(resume_id, current_user.id, limit)
+    matches = await recommender.match_resume_to_jobs(resume_id, current_user.id, limit)
     
     return {
         "resume_id": resume_id,
@@ -249,6 +270,7 @@ async def match_jobs(
 
 
 @router.get("/{resume_id}/job-recommendations", response_model=JobRecommendationResponse)
+@cache_response(ttl=300)
 async def get_job_recommendations(
     resume_id: int,
     limit: int = 10,
@@ -270,11 +292,21 @@ async def optimize_resume(
     manager = ResumeManager(db)
     resume = manager.get_resume(resume_id, current_user.id)
     if not resume:
-        raise HTTPException(status_code=404, detail="Resume not found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Resume with id {resume_id} not found or you don't have access to it"
+        )
+    
+    # Validate that the resume has necessary data for optimization
+    if not resume.parsed_data and not resume.summary and not resume.experience:
+        raise HTTPException(
+            status_code=400,
+            detail="Resume has insufficient data for optimization. Please add content to your resume first."
+        )
         
     optimizer = ResumeOptimizer(db)
     try:
-        result = optimizer.optimize_resume(
+        result = await optimizer.optimize_resume(
             resume_id=resume_id,
             user_id=current_user.id,
             optimization_type=request.optimization_type,
@@ -284,13 +316,21 @@ async def optimize_resume(
         )
         
         if not result["success"]:
-            raise HTTPException(status_code=400, detail=result.get("error", "Optimization failed"))
+            error_msg = result.get("error", "Optimization failed")
+            raise HTTPException(status_code=400, detail=error_msg)
             
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal error during optimization: {str(e)}")
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Unexpected error during resume optimization for resume {resume_id}")
+        raise HTTPException(
+            status_code=500, 
+            detail="An unexpected error occurred during optimization. Please try again or contact support if the issue persists."
+        )
 
 
 @router.post("/{resume_id}/process-pipeline")
@@ -299,31 +339,40 @@ async def process_resume_pipeline(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Run full resume processing pipeline (parse -> ats-score)."""
-    manager = ResumeManager(db)
-    resume = manager.get_resume(resume_id, current_user.id)
+    """Run full resume processing pipeline (parse -> embed -> ats-score)."""
+    resume = db.query(Resume).filter(Resume.id == resume_id, Resume.user_id == current_user.id).first()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
         
-    # 1. Parse (if file exists)
-    if resume.file_path:
-        parsed_data = manager.parse_resume_file(resume_id, current_user.id)
-    else:
-        # If manually created, we already have some data
-        parsed_data = json.loads(resume.parsed_data) if resume.parsed_data else {}
-        
-    # 2. ATS Score
-    ats_result = manager.get_ats_score(resume_id, current_user.id, "")
+    pipeline = ResumePipelineService(db)
     
-    return {
-        "success": True,
-        "resume_id": resume_id,
-        "parsed_data": parsed_data,
-        "ats_result": ats_result
-    }
+    # Check if we have a file path
+    if resume.file_path:
+        result = await pipeline.process_resume_upload(resume_id, resume.file_path, current_user.id)
+    else:
+        # For manually created resumes, we skip parsing but need embeddings and ATS
+        # Generate embeddings
+        embed_result = pipeline.generate_resume_embeddings(resume_id, current_user.id)
+        # Run ATS
+        ats_result = await pipeline.run_ats_analysis(resume_id, current_user.id)
+        
+        result = {
+            "success": embed_result.get("success") and ats_result.get("success"),
+            "resume_id": resume_id,
+            "stages_completed": ["embeddings", "ats_analysis"] if embed_result.get("success") and ats_result.get("success") else [],
+            "errors": []
+        }
+        if not embed_result.get("success"): result["errors"].append(f"Embed: {embed_result.get('error')}")
+        if not ats_result.get("success"): result["errors"].append(f"ATS: {ats_result.get('error')}")
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=f"Pipeline failed: {', '.join(result.get('errors', []))}")
+    
+    return result
 
 
 @router.get("/{resume_id}/versions", response_model=List[ResumeVersionResponse])
+@cache_response(ttl=300)
 async def get_resume_versions(
     resume_id: int,
     current_user: User = Depends(get_current_user),
@@ -335,13 +384,35 @@ async def get_resume_versions(
     return versions
 
 
-@router.get("/{resume_id}/preview")
-async def preview_resume(
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_resumes(
+    request: BulkDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Bulk delete multiple resumes for the current user."""
+    if not request.ids:
+        raise HTTPException(status_code=400, detail="No resume IDs provided")
+    
+    manager = ResumeManager(db)
+    result = manager.bulk_delete(request.ids, current_user.id)
+    
+    message = f"Successfully deleted {result['deleted']} resume(s). {result['failed']} failed."
+    
+    return BulkDeleteResponse(
+        deleted=result["deleted"],
+        failed=result["failed"],
+        message=message
+    )
+
+
+@router.get("/{resume_id}/download")
+async def download_resume(
     resume_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Preview a resume."""
+    """Download resume as PDF."""
     manager = ResumeManager(db)
     resume = manager.get_resume(resume_id, current_user.id)
     
@@ -349,19 +420,26 @@ async def preview_resume(
         raise HTTPException(status_code=404, detail="Resume not found")
     
     if not resume.file_path:
-        raise HTTPException(status_code=400, detail="Resume has no file associated")
+        raise HTTPException(status_code=400, detail="Resume has no associated file for download")
     
-    # Get the file using cloud_storage_service
-    # If local, return FileResponse
-    # If S3/GCS, we could either redirect to signed URL or stream it
     try:
         if hasattr(cloud_storage_service.provider, "_get_file_path"):
             full_path = cloud_storage_service.provider._get_file_path(resume.file_path)
-            return FileResponse(full_path, media_type="application/pdf")
+            filename = resume.filename or f"resume_{resume.id}.pdf"
+            return FileResponse(full_path, media_type="application/pdf", filename=filename)
         else:
-            # For cloud providers, generate signed URL and redirect
             signed_url = cloud_storage_service.get_file_url(resume.file_path)
             from fastapi.responses import RedirectResponse
             return RedirectResponse(signed_url)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error accessing file: {str(e)}")
+        logging.error(f"Download error for resume {resume_id}: {e}")
+        raise HTTPException(status_code=500, detail="Download failed")
+
+@router.get("/{resume_id}/preview")
+async def preview_resume(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Preview a resume."""
+    return await download_resume(resume_id, current_user, db)

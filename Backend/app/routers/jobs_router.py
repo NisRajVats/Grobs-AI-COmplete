@@ -21,7 +21,7 @@ from app.services.job_service.ingestion import (
     get_all_jobs as get_all_jobs_db,
     ingest_all_jobs
 )
-from app.services.job_service.ranking import JobRecommender
+from app.services.job_service.job_matcher import JobMatcher as JobRecommender
 from app.services.resume_service.resume_manager import ResumeManager
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
@@ -162,7 +162,7 @@ async def get_job_recommendations(
 ):
     """Get job recommendations based on a resume."""
     recommender = JobRecommender(db)
-    matches = recommender.match_resume_to_jobs(resume_id, current_user.id, limit)
+    matches = await recommender.match_resume_to_jobs(resume_id, current_user.id, limit)
     
     return jsonable_encoder({
         "resume_id": resume_id,

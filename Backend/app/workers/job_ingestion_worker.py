@@ -4,6 +4,7 @@ Job Ingestion Worker - Ingests and processes jobs from external sources.
 This worker fetches jobs from external APIs, normalizes data, and generates embeddings.
 """
 import logging
+import asyncio
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -38,10 +39,10 @@ def process_job_ingestion(job_id: int) -> dict:
         skills_result = _extract_and_store_skills(job, db)
         
         # Step 2: Generate embedding
-        embedding_result = _generate_job_embedding(job, db)
+        embedding_result = asyncio.run(_generate_job_embedding(job, db))
         
         # Update job timestamp
-        job.updated_at = datetime.now().isoformat()
+        job.updated_at = datetime.now()
         db.commit()
         
         logger.info(f"[JobIngestionWorker] Successfully processed job {job_id}")
@@ -151,7 +152,7 @@ def _extract_and_store_skills(job: Job, db: Session) -> dict:
     return {"count": len(skills)}
 
 
-def _generate_job_embedding(job: Job, db: Session) -> dict:
+async def _generate_job_embedding(job: Job, db: Session) -> dict:
     """Generate vector embedding for a job."""
     try:
         from app.services.llm_service import llm_service
@@ -159,8 +160,8 @@ def _generate_job_embedding(job: Job, db: Session) -> dict:
         # Build job text
         job_text = _build_job_text(job)
         
-        # Generate embedding
-        embeddings = llm_service.generate_embeddings(job_text)
+        # Generate embedding asynchronously
+        embeddings = await llm_service.generate_embeddings_async(job_text)
         
         if not embeddings:
             return {"success": False, "error": "No embedding returned"}

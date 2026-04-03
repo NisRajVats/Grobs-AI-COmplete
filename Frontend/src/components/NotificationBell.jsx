@@ -114,7 +114,16 @@ const NotificationBell = () => {
         setUnreadCount(prev => Math.max(0, prev - 1));
       }
     } catch (error) {
-      console.error('Error deleting notification:', error);
+      // Provide more specific error feedback
+      if (error.response?.status === 404) {
+        console.error('Notification not found (it may have already been deleted)');
+        // Remove from local state anyway since it doesn't exist on server
+        setNotifications(prev => prev.filter(n => n.id !== notificationId));
+      } else if (error.response?.status === 403) {
+        console.error('You do not have permission to delete this notification');
+      } else {
+        console.error('Error deleting notification:', error);
+      }
     }
   };
 

@@ -16,7 +16,7 @@ class Job(Base):
     id = Column(Integer, primary_key=True, index=True)
     
     # Job details
-    job_title = Column(String, nullable=False)
+    job_title = Column(String, nullable=False, index=True)
     company_name = Column(String, nullable=False)
     location = Column(String, nullable=True)
     job_type = Column(String, nullable=True)  # Full-time, Part-time, Contract, etc.

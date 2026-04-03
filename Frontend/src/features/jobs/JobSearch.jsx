@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, MapPin, Briefcase, Clock, DollarSign, ChevronRight, Star, Globe, Building2, Bookmark, BarChart3, Loader2, AlertCircle } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { Search, MapPin, Briefcase, Clock, DollarSign, ChevronRight, Star, Globe, Building2, Bookmark, BarChart3, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { jobsAPI } from '../../services/api';
+import { jobsAPI, resumeAPI } from '../../services/api';
 
 const JobSearch = () => {
+  const { resumeId } = useParams();
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -11,16 +13,44 @@ const JobSearch = () => {
   const [totalJobs, setTotalJobs] = useState(0);
   const [savingJobId, setSavingJobId] = useState(null);
   const [savedJobIds, setSavedJobIds] = useState(new Set());
+  const [isMatching, setIsMatching] = useState(false);
+  const [resume, setResume] = useState(null);
 
   const fetchJobs = useCallback(async (query = '') => {
-    setLoading(true); setError(null);
+    setLoading(true);
+    setError(null);
     try {
-      let response = query.trim() ? await jobsAPI.searchJobs(query, 50) : await jobsAPI.getJobs(0, 50);
-      setJobs(response.data.jobs || []); setTotalJobs(response.data.total || 0);
-    } catch {
+      let response;
+      if (resumeId && !query.trim()) {
+        setIsMatching(true);
+        response = await jobsAPI.getJobRecommendations(resumeId, 50);
+        // Transform recommendation response to match standard job response structure if needed
+        const matchedJobs = response.data.recommendations || [];
+        setJobs(matchedJobs.map(m => ({ ...m.job, match_score: m.match_score })));
+        setTotalJobs(response.data.total || matchedJobs.length);
+      } else {
+        setIsMatching(false);
+        response = query.trim() ? await jobsAPI.searchJobs(query, 50) : await jobsAPI.getJobs(0, 50);
+        setJobs(response.data.jobs || []);
+        setTotalJobs(response.data.total || 0);
+      }
+    } catch (err) {
+      console.error("Error fetching jobs:", err);
       setError('Failed to load jobs. Make sure the backend is running.');
-    } finally { setLoading(false); }
-  }, []);
+    } finally {
+      setLoading(false);
+    }
+  }, [resumeId]);
+
+  const fetchResumeInfo = useCallback(async () => {
+    if (!resumeId) return;
+    try {
+      const res = await resumeAPI.getResume(resumeId);
+      setResume(res.data);
+    } catch (err) {
+      console.error("Error fetching resume info:", err);
+    }
+  }, [resumeId]);
 
   const fetchSavedJobs = useCallback(async () => {
     try {
@@ -29,7 +59,11 @@ const JobSearch = () => {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { fetchJobs(); fetchSavedJobs(); }, [fetchJobs, fetchSavedJobs]);
+  useEffect(() => { 
+    fetchJobs(); 
+    fetchSavedJobs();
+    fetchResumeInfo();
+  }, [fetchJobs, fetchSavedJobs, fetchResumeInfo]);
 
   const handleSearch = (e) => { e.preventDefault(); fetchJobs(searchQuery); };
 
@@ -59,8 +93,18 @@ const JobSearch = () => {
       <div className="card-glass p-8 md:p-10 space-y-8 border-white/5 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/10 blur-3xl -z-10"></div>
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold text-white tracking-tight">Discover Your <span className="text-blue-500 italic">Next Big Role</span></h1>
-          <p className="text-slate-400">AI-curated job opportunities from top companies.</p>
+          <h1 className="text-4xl font-bold text-white tracking-tight">
+            {isMatching ? (
+              <>Jobs Matched for <span className="text-blue-500 italic">{resume?.filename || 'Your Resume'}</span></>
+            ) : (
+              <>Discover Your <span className="text-blue-500 italic">Next Big Role</span></>
+            )}
+          </h1>
+          <p className="text-slate-400">
+            {isMatching 
+              ? "AI-matched opportunities based on your skills and experience."
+              : "AI-curated job opportunities from top companies."}
+          </p>
         </div>
         <form onSubmit={handleSearch} className="grid grid-cols-1 md:grid-cols-12 gap-4">
           <div className="md:col-span-9 relative group">
@@ -103,11 +147,23 @@ const JobSearch = () => {
                     </div>
                     <div className="flex-1 space-y-4">
                       <div className="flex items-start justify-between">
-                        <div>
-                          <h3 className="text-2xl font-bold text-white group-hover:text-blue-400 transition-colors">{job.job_title}</h3>
+                        <div className="min-w-0">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                            <h3 className="text-2xl font-bold text-white group-hover:text-blue-400 transition-colors truncate">{job.job_title}</h3>
+                            {job.match_score && (
+                              <div className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-black uppercase tracking-wider">
+                                <Sparkles size={10} /> {job.match_score}% Match
+                              </div>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-lg font-semibold text-slate-300">{job.company_name}</span>
-                            {job.location && <><span className="w-1.5 h-1.5 bg-slate-700 rounded-full"></span><span className="text-slate-500 flex items-center gap-1.5"><MapPin size={14} /> {job.location}</span></>}
+                            {job.location && (
+                              <>
+                                <span className="w-1.5 h-1.5 bg-slate-700 rounded-full"></span>
+                                <span className="text-slate-500 flex items-center gap-1.5"><MapPin size={14} /> {job.location}</span>
+                              </>
+                            )}
                           </div>
                         </div>
                         <button onClick={() => handleSaveJob(job.id)} disabled={savingJobId === job.id} className={`p-3 border rounded-xl transition-all ${savedJobIds.has(job.id) ? 'bg-amber-400/10 border-amber-500/30 text-amber-400' : 'bg-white/5 border-white/10 text-slate-500 hover:text-amber-400'}`}>

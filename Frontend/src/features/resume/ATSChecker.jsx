@@ -46,7 +46,7 @@ const ATSChecker = () => {
         },
       });
 
-      const resumeId = uploadResponse.data.resume_id;
+      const resumeId = uploadResponse.data.id;
 
       // 2. Perform ATS Check
       const atsResponse = await api.post(`/api/resumes/${resumeId}/ats-check`, {
@@ -59,10 +59,9 @@ const ATSChecker = () => {
       setAnalysis({
         score: data.overall_score,
         matchRate: data.category_scores.job_match || 0,
-        // Since backend doesn't return found/missing keywords specifically in the response 
-        // (it uses them internally), we'll adapt from issues/recommendations or use defaults
-        keywordsFound: data.category_scores.keyword_optimization > 50 ? ['Detected'] : [],
-        missingKeywords: data.issues.filter(i => i.toLowerCase().includes('keyword')).length > 0 ? ['Technical Skills'] : [],
+        skill_analysis: data.skill_analysis,
+        keyword_gap: data.keyword_gap,
+        industry_tips: data.industry_tips,
         issues: data.issues.map(issue => ({
           type: 'Analysis',
           message: issue,
@@ -262,15 +261,94 @@ const ATSChecker = () => {
                           </div>
                        </div>
                     ))}
-                    <button 
-                       onClick={() => setAnalysis(null)}
-                       className="w-full py-4 mt-4 bg-slate-800 hover:bg-slate-700 text-white font-black rounded-2xl transition-all"
-                    >
-                       Analyze Another Resume
-                    </button>
                  </div>
               </div>
            </div>
+
+           {/* New: Skill Extraction Section */}
+           {analysis.skill_analysis && (
+              <div className="card-glass p-10 space-y-8">
+                 <h3 className="text-2xl font-bold text-white flex items-center gap-3">
+                    <Target className="text-blue-400" /> Advanced Skill Extraction
+                 </h3>
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div className="space-y-4">
+                       <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Hard Skills</h4>
+                       <div className="flex flex-wrap gap-2">
+                          {analysis.skill_analysis.hard_skills?.map((skill, i) => (
+                             <span key={i} className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-400 text-xs font-bold">{skill}</span>
+                          ))}
+                       </div>
+                    </div>
+                    <div className="space-y-4">
+                       <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Soft Skills</h4>
+                       <div className="flex flex-wrap gap-2">
+                          {analysis.skill_analysis.soft_skills?.map((skill, i) => (
+                             <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-bold">{skill}</span>
+                          ))}
+                       </div>
+                    </div>
+                    <div className="space-y-4">
+                       <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Tools & Platforms</h4>
+                       <div className="flex flex-wrap gap-2">
+                          {analysis.skill_analysis.tools?.map((skill, i) => (
+                             <span key={i} className="px-3 py-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-400 text-xs font-bold">{skill}</span>
+                          ))}
+                       </div>
+                    </div>
+                 </div>
+              </div>
+           )}
+
+           {/* New: Keyword Gap Analysis */}
+           {analysis.keyword_gap && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                 <div className="card-glass p-8 space-y-6">
+                    <h3 className="font-bold text-white flex items-center gap-2">
+                       <CheckCircle2 size={20} className="text-green-400" /> Matched Keywords
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                       {analysis.keyword_gap.matched?.map((keyword, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-medium">{keyword}</span>
+                       ))}
+                    </div>
+                 </div>
+                 <div className="card-glass p-8 space-y-6">
+                    <h3 className="font-bold text-white flex items-center gap-2">
+                       <AlertTriangle size={20} className="text-rose-400" /> Missing Keywords
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                       {analysis.keyword_gap.missing?.map((keyword, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-medium">{keyword}</span>
+                       ))}
+                    </div>
+                 </div>
+              </div>
+           )}
+
+           {/* New: Industry Tips */}
+           {analysis.industry_tips && analysis.industry_tips.length > 0 && (
+              <div className="card-glass p-10 bg-linear-to-r from-blue-600/5 to-indigo-600/5 border-blue-500/20">
+                 <h3 className="text-2xl font-bold text-white mb-8 flex items-center gap-3">
+                    <Sparkles size={24} className="text-amber-400" /> Industry-Specific Optimization
+                 </h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {analysis.industry_tips.map((tip, i) => (
+                       <div key={i} className="p-5 bg-white/5 border border-white/5 rounded-2xl text-slate-300 text-sm flex gap-4 hover:bg-white/10 transition-colors">
+                          <CheckCircle2 size={18} className="text-blue-500 shrink-0 mt-0.5" />
+                          {tip}
+                       </div>
+                    ))}
+                 </div>
+              </div>
+           )}
+
+           <button 
+              onClick={() => setAnalysis(null)}
+              className="w-full py-5 bg-slate-800 hover:bg-slate-700 text-white font-black rounded-3xl transition-all shadow-xl"
+           >
+              Analyze Another Resume
+           </button>
         </motion.div>
       )}
     </div>
