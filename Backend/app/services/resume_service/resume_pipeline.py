@@ -122,9 +122,27 @@ class ResumePipelineService:
         try:
             # Resolve absolute path for local storage
             full_path = file_path
-            if not full_path.startswith("http"):
+            from app.core.config import settings
+            if not full_path.startswith("http") and settings.STORAGE_PROVIDER == "local" and not os.path.isabs(full_path):
+                upload_dir = settings.UPLOAD_DIR
+                
+                # Candidate 1: Direct join with settings.UPLOAD_DIR (relative to CWD)
+                path1 = os.path.join(upload_dir, full_path)
+                
+                # Candidate 2: Absolute path via project root (Backend directory)
+                # dirname(__file__) is Backend/app/services/resume_service/
                 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                full_path = os.path.join(base_dir, "uploads", full_path)
+                path2 = os.path.join(base_dir, upload_dir.lstrip("./"), full_path)
+                
+                # Candidate 3: Root project directory (if Backend is a subdirectory)
+                path3 = os.path.join(base_dir, "..", "uploads", full_path)
+                
+                if os.path.exists(path1):
+                    full_path = path1
+                elif os.path.exists(path2):
+                    full_path = path2
+                elif os.path.exists(path3):
+                    full_path = path3
             
             # Parse the resume file
             parsed_data = parse_resume_file(full_path)

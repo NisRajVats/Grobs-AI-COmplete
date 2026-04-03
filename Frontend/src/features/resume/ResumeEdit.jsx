@@ -27,7 +27,6 @@ const ResumeEdit = () => {
   const [activeTab, setActiveTab] = useState("personal");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
 
   const [resumeData, setResumeData] = useState({
     personal: {
@@ -134,7 +133,6 @@ const ResumeEdit = () => {
       };
 
       const response = await resumeAPI.updateResume(resumeId, updateData);
-      setSaveMsg("Saved Successfully!");
 
       // Update rawParsedData with the latest from backend to keep it in sync
       if (response.data && response.data.parsed_data) {
@@ -145,10 +143,8 @@ const ResumeEdit = () => {
       }
     } catch (error) {
       console.error("Save failed:", error);
-      setSaveMsg("Save failed");
     } finally {
       setSaving(false);
-      setTimeout(() => setSaveMsg(""), 3000);
     }
   };
 
@@ -216,13 +212,6 @@ const ResumeEdit = () => {
               </h2>
             </div>
             <div className="flex gap-2 items-center">
-              {saveMsg && (
-                <span
-                  className={`text-xs font-bold ${saveMsg.includes("failed") ? "text-rose-400" : "text-green-400"}`}
-                >
-                  {saveMsg}
-                </span>
-              )}
               <button
                 onClick={handleSave}
                 disabled={saving}

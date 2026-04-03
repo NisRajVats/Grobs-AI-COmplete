@@ -4,7 +4,7 @@ Includes multi-resume support and all resume actions.
 """
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, status, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
@@ -81,15 +81,17 @@ async def create_resume(
 @router.post("/upload", response_model=ResumeDetailResponse)
 async def upload_resume(
     file: UploadFile = File(...),
-    title: Optional[str] = None,
-    target_role: Optional[str] = None,
+    title: Optional[str] = Form(None),
+    target_role: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Upload a resume PDF file and parse immediately."""
+    logger = logging.getLogger(__name__)
     try:
         # Read file content
         file_content = await file.read()
+        logger.info(f"Upload started: filename={file.filename}, size={len(file_content)}, title={title}, target_role={target_role}")
         
         manager = ResumeManager(db)
         
@@ -109,7 +111,7 @@ async def upload_resume(
         # IMMEDIATELY parse (sync) - populate parsed_data + nested tables
         await manager.parse_resume_file(resume.id, current_user.id)
         
-        # Refresh with eager loading to ensure relationships are loaded
+        # Explicitly reload the resume from DB to get the latest state after parsing
         from sqlalchemy.orm import selectinload
         resume = db.query(Resume).options(
             selectinload(Resume.education),
@@ -118,7 +120,10 @@ async def upload_resume(
             selectinload(Resume.skills),
             selectinload(Resume.versions),
             selectinload(Resume.analyses)
-        ).filter(Resume.id == resume.id).first()
+        ).filter(Resume.id == resume.id, Resume.user_id == current_user.id).first()
+        
+        if not resume:
+            raise HTTPException(status_code=404, detail="Resume not found after parsing")
         
         # Create notification
         try:
@@ -138,8 +143,12 @@ async def upload_resume(
         return ResumeDetailResponse.from_orm(resume)
     
     except ValueError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"ValueError in upload_resume: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Unexpected error in upload_resume: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error uploading resume: {str(e)}")
 
 

@@ -4,8 +4,8 @@ Resume Schemas
 Pydantic models for resume endpoints.
 """
 import json
-from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Any, Union
 from datetime import datetime
 from app.utils.encryption import decrypt
 
@@ -76,7 +76,16 @@ class ProjectBase(BaseModel):
     desc: Optional[str] = None  # Frontend compatibility
     project_url: Optional[str] = None
     github_url: Optional[str] = None
-    technologies: Optional[str] = None
+    technologies: Optional[Any] = None  # Extremely flexible
+    points: Optional[List[str]] = []
+
+    @field_validator('technologies', mode='before')
+    @classmethod
+    def validate_technologies(cls, v):
+        """Coerce list of technologies to string if needed."""
+        if isinstance(v, list):
+            return ", ".join([str(item) for item in v])
+        return v
 
 
 class ProjectCreate(ProjectBase):

@@ -47,16 +47,24 @@ class ResumeManager:
         Returns:
             Created Resume object
         """
+        logger.info(f"create_resume called: user_id={user.id}, filename={filename}, file_size={len(file_content) if file_content else 0}")
+        
         # Handle file upload if provided
         file_path = None
         resume_file_url = None
         
         if file_content and filename:
-            storage_obj = storage_service.upload_resume(
-                user.id, file_content, filename
-            )
-            file_path = storage_obj.key
-            resume_file_url = storage_obj.url
+            try:
+                logger.info(f"Uploading file to storage: {filename}")
+                storage_obj = storage_service.upload_resume(
+                    user.id, file_content, filename
+                )
+                file_path = storage_obj.key
+                resume_file_url = storage_obj.url
+                logger.info(f"File uploaded successfully: key={file_path}")
+            except Exception as e:
+                logger.error(f"Storage upload failed: {e}")
+                raise
         
         # Create main resume record
         db_resume = Resume(
@@ -243,19 +251,42 @@ class ResumeManager:
         
         # Robust path resolution for local storage
         full_path = resume.file_path
-        if settings.STORAGE_PROVIDER == "local":
+        if settings.STORAGE_PROVIDER == "local" and not os.path.isabs(full_path):
+            # Try matching how LocalStorageService saves files: relative to settings.UPLOAD_DIR
+            upload_dir = settings.UPLOAD_DIR
+            
+            # Candidate 1: Direct join with settings.UPLOAD_DIR (relative to CWD)
+            path1 = os.path.join(upload_dir, full_path)
+            
+            # Candidate 2: Absolute path via project root (Backend directory)
+            # dirname(__file__) is Backend/app/services/resume_service/
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-            full_path = os.path.join(base_dir, "uploads", full_path.lstrip("uploads/").lstrip("/"))
+            path2 = os.path.join(base_dir, upload_dir.lstrip("./"), full_path)
+            
+            # Candidate 3: Root project directory (if Backend is a subdirectory)
+            path3 = os.path.join(base_dir, "..", "uploads", full_path)
+            
+            if os.path.exists(path1):
+                full_path = path1
+            elif os.path.exists(path2):
+                full_path = path2
+            elif os.path.exists(path3):
+                full_path = path3
         
-        logger.info(f"Parsing resume {resume_id} from path: {full_path}")
+        logger.info(f"Parsing resume {resume_id} from final resolved path: {full_path}")
         
         if not os.path.exists(full_path):
             logger.error(f"File not found: {full_path}")
-            return None
+            raise ValueError(f"Resume file not found at {full_path}. Upload failed.")
         
         try:
             parsed_data = await parse_resume_async(full_path)
             
+            if not parsed_data:
+                logger.error(f"Resume parsing returned empty data for {resume_id}")
+                raise ValueError("Resume parsing failed to extract any data.")
+            
+            logger.info(f"Updating resume {resume_id} with parsed data")
             # Update resume with parsed data
             resume.parsed_data = json.dumps(parsed_data)
             resume.full_name = encrypt(parsed_data.get("full_name", ""))
@@ -268,12 +299,15 @@ class ResumeManager:
             self._update_nested_data(resume, parsed_data)
             
             self.db.commit()
+            self.db.refresh(resume)
             
             logger.info(f"Successfully parsed resume {resume_id}")
             return parsed_data
         except Exception as e:
             logger.error(f"Error parsing resume {resume_id}: {e}")
-            return None
+            if isinstance(e, ValueError):
+                raise e
+            raise ValueError(f"Failed to parse resume: {str(e)}")
     
     async def get_ats_score(
         self,
@@ -366,7 +400,8 @@ class ResumeManager:
                 description=proj_data.get("description") or proj_data.get("desc"),
                 project_url=proj_data.get("project_url"),
                 github_url=proj_data.get("github_url"),
-                technologies=proj_data.get("technologies")
+                technologies=proj_data.get("technologies"),
+                points=proj_data.get("points", [])
             )
             self.db.add(proj)
         

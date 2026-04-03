@@ -4,9 +4,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: {},
 });
 
 // Add a request interceptor to attach the JWT token
@@ -14,6 +12,9 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
     if (token) {
+      if (!config.headers) {
+        config.headers = {};
+      }
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -107,15 +108,13 @@ export const resumeAPI = {
     formData.append('file', file);
     if (title) formData.append('title', title);
     if (targetRole) formData.append('target_role', targetRole);
-    return api.post('/api/resumes/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
+    // Debug: log FormData contents
+    for (let pair of formData.entries()) {
+      console.log('FormData:', pair[0], pair[1]);
+    }
+    // Do NOT set Content-Type manually; Axios will handle it for FormData
+    return api.post('/api/resumes/upload', formData);
   },
-  parseResume: (id) => api.post(`/api/resumes/${id}/parse`),
-  getAtsScore: (id, jobDescription) => api.post(`/api/resumes/${id}/ats-score`, { job_description: jobDescription }),
-  getJobRecommendations: (id, limit = 10) => api.get(`/api/resumes/${id}/job-recommendations?limit=${limit}`),
   getResumeVersions: (id) => api.get(`/api/resumes/${id}/versions`),
   downloadResume: (id) => api.get(`/api/resumes/${id}/download`, { responseType: 'blob' }),
   getResumePreview: (id) => api.get(`/api/resumes/${id}/preview`),

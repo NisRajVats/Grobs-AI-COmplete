@@ -98,7 +98,12 @@ const Bullets = React.memo(({ points, text }) => {
 
 /* ─── Live preview sub-component ─────────────────────────────────────────── */
 const LiveResume = React.memo(({ data }) => {
-  const contactItems = React.useMemo(() => [data.personal?.email, data.personal?.phone, data.personal?.location].filter(Boolean), [data.personal]);
+  const contactItems = React.useMemo(() => [
+    data.personal?.email,
+    data.personal?.phone,
+    data.personal?.location,
+    data.personal?.linkedin ? data.personal.linkedin.replace(/^https?:\/\/(www\.)?/, "") : null
+  ].filter(Boolean), [data.personal]);
 
   const groupedSkills = React.useMemo(() => (data.skills || []).reduce((acc, s) => {
     const cat  = typeof s === 'object' ? (s.category || 'Skills') : 'Skills';
@@ -290,15 +295,11 @@ const ResumeBuilder = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("personal");
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
-  const [parseMsg, setParseMsg] = useState("");
-  const saveMsgTimerRef = useRef(null);
-  const parseMsgTimerRef = useRef(null);
   const skillInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const [resumeData, setResumeData] = useState({
-    personal: { name: "", title: "", email: "", phone: "", location: "" },
+    personal: { name: "", title: "", email: "", phone: "", location: "", linkedin: "", github: "" },
     summary: "",
     experience: [],
     education: [],
@@ -316,22 +317,10 @@ const ResumeBuilder = () => {
     return () => clearTimeout(timer);
   }, [resumeData]);
 
-  useEffect(() => {
-    return () => {
-      if (saveMsgTimerRef.current) clearTimeout(saveMsgTimerRef.current);
-    };
-  }, []);
-
-  const showSaveMsg = (msg) => {
-    setSaveMsg(msg);
-    if (saveMsgTimerRef.current) clearTimeout(saveMsgTimerRef.current);
-    saveMsgTimerRef.current = setTimeout(() => setSaveMsg(""), 2000);
-  };
-
   const handleSave = async () => {
     const { name, email, phone, title } = resumeData.personal;
-    if (!name.trim()) { showSaveMsg("Name is required"); return; }
-    if (!email.trim() || !/\S+@\S+\.\S+/.test(email)) { showSaveMsg("Valid email required"); return; }
+    if (!name.trim()) return;
+    if (!email.trim() || !/\S+@\S+\.\S+/.test(email)) return;
 
     setSaving(true);
     try {
@@ -339,85 +328,81 @@ const ResumeBuilder = () => {
         full_name:  name.trim(),
         email:      email.trim(),
         phone:      phone.trim(),
+        linkedin_url: resumeData.personal.linkedin.trim(),
+        github_url:   resumeData.personal.github.trim(),
         title:      title.trim() || name.trim(),
         summary:    resumeData.summary,
         education:  resumeData.education.map(e => ({ school: e.school, degree: e.degree, location: e.location, duration: e.duration || e.year })),
-        projects:   resumeData.projects.map(p => ({ project_name: p.project_name, technologies: p.technologies, desc: p.desc || p.description })),
-        experience: resumeData.experience.map(e => ({ company: e.company, role: e.role, duration: e.duration, desc: e.desc })),
+        projects:   resumeData.projects.map(p => ({ project_name: p.project_name, technologies: p.technologies, desc: p.desc || p.description, points: p.points || [] })),
+        experience: resumeData.experience.map(e => ({ company: e.company, role: e.role, duration: e.duration, desc: e.desc, points: e.points || [] })),
         skills:     resumeData.skills.map(s => ({ name: s })),
       };
-      const response = await resumeAPI.createResume(payload);
-      showSaveMsg(`Resume "${payload.title || payload.full_name}" saved successfully! Redirecting...`);
-      
-      setTimeout(() => {
-        navigate('/app/resumes', { state: { success: `Resume "${payload.title || payload.full_name}" created!` } });
-      }, 800);
+      await resumeAPI.createResume(payload);
+      navigate('/app/resumes');
     } catch (error) {
       console.error("Save error:", error);
-      showSaveMsg(`Save failed: ${error.response?.data?.detail || 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDownload = () => {
-    showSaveMsg('Save your resume first, then download from My Resumes page!');
-  };
-
-  const showParseMsg = (msg) => {
-    setParseMsg(msg);
-    if (parseMsgTimerRef.current) clearTimeout(parseMsgTimerRef.current);
-    parseMsgTimerRef.current = setTimeout(() => setParseMsg(""), 3000);
+    window.print();
   };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    showParseMsg("Parsing resume...");
     try {
       const response = await resumeAPI.uploadResume(file, file.name, "");
-      if (response.data) {
-        const parsed = response.data.parsed_data || response.data;
+      const data = response.data;
+      if (data) {
+        const parsed = data.parsed_data || data;
+        
+        // Ensure skills are handled correctly (might be array of strings or objects)
+        const formattedSkills = (parsed.skills || data.skills || [])
+          .map(s => typeof s === 'string' ? s : (s.name || s))
+          .filter(Boolean);
+
         setResumeData({
           personal: {
-            name:     parsed.full_name || response.data.full_name || resumeData.personal.name,
-            title:    parsed.title     || response.data.title     || resumeData.personal.title,
-            email:    parsed.email     || response.data.email     || resumeData.personal.email,
-            phone:    parsed.phone     || response.data.phone     || resumeData.personal.phone,
-            location: parsed.location  || response.data.location  || resumeData.personal.location,
+            name:     parsed.full_name || data.full_name || parsed.name || data.name || "",
+            title:    parsed.title     || data.title     || "",
+            email:    parsed.email     || data.email     || "",
+            phone:    parsed.phone     || data.phone     || "",
+            location: parsed.location  || data.location  || "",
+            linkedin: parsed.linkedin_url || data.linkedin_url || parsed.linkedin || data.linkedin || "",
+            github:   parsed.github_url || data.github_url || parsed.github || data.github || "",
           },
-          summary: parsed.summary || response.data.summary || resumeData.summary,
-          experience: (parsed.experience || response.data.experience)?.map(exp => ({
+          summary: parsed.summary || data.summary || "",
+          experience: (parsed.experience || data.experience || [])?.map(exp => ({
             id:       genId(),
             company:  exp.company  || "",
             role:     exp.role     || "",
-            duration: exp.start_date && exp.end_date ? `${exp.start_date} – ${exp.end_date}` : exp.duration || "",
+            duration: exp.duration || (exp.start_date && exp.end_date ? `${exp.start_date} – ${exp.end_date}` : exp.start_date || ""),
             desc:     exp.description || exp.desc || "",
             points:   exp.points || [],
-          })) || resumeData.experience,
-          education: (parsed.education || response.data.education)?.map(edu => ({
+          })),
+          education: (parsed.education || data.education || [])?.map(edu => ({
             id:       genId(),
             school:   edu.school   || "",
             degree:   edu.degree   || "",
             major:    edu.major    || "",
             location: edu.location || "",
-            duration: edu.duration || (edu.start_date && edu.end_date ? `${edu.start_date} – ${edu.end_date}` : edu.year || edu.end_date || edu.start_date || ""),
-          })) || resumeData.education,
-          projects: (parsed.projects || response.data.projects)?.map(proj => ({
+            duration: edu.duration || (edu.start_date && edu.end_date ? `${edu.start_date} – ${edu.end_date}` : edu.year || ""),
+          })),
+          projects: (parsed.projects || data.projects || [])?.map(proj => ({
             id:           genId(),
             project_name: proj.project_name || "",
-            technologies: proj.technologies  || "",
+            technologies: Array.isArray(proj.technologies) ? proj.technologies.join(", ") : proj.technologies || "",
             desc:         proj.description   || proj.desc || "",
             points:       proj.points || [],
-          })) || resumeData.projects,
-          skills: (parsed.skills || response.data.skills)?.map(s => typeof s === 'string' ? s : s.name) || resumeData.skills,
+          })),
+          skills: formattedSkills,
         });
-        showParseMsg("Success! Resume parsed and loaded.");
-      } else {
-        throw new Error("Invalid response format");
       }
-    } catch {
-      showParseMsg("Parse failed – using manual entry");
+    } catch (err) {
+      console.error("Upload error:", err);
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -476,16 +461,6 @@ const ResumeBuilder = () => {
               <FileText className="text-blue-500" /> Resume Builder
             </h2>
             <div className="flex gap-2 items-center">
-{saveMsg && (
-                <span className={`text-xs font-bold px-3 py-1 rounded-full ${saveMsg.includes('Saved') || saveMsg.includes('successfully') ? "bg-green-500/20 text-green-400 border border-green-500/30" : "bg-rose-500/20 text-rose-400 border border-rose-500/30"}`}>
-                  {saveMsg}
-                </span>
-              )}
-              {parseMsg && (
-                <span className={`text-xs font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30`}>
-                  {parseMsg}
-                </span>
-              )}
               <button onClick={handleSave} disabled={saving} className="p-2.5 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white transition-all disabled:opacity-50 no-print">
                 <Save size={18} />
               </button>
@@ -548,9 +523,19 @@ const ResumeBuilder = () => {
                         <input name="phone" value={resumeData.personal.phone || ''} onChange={handlePersonalChange} className={inp} />
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Location</label>
-                      <input name="location" value={resumeData.personal.location || ''} onChange={handlePersonalChange} className={inp} />
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Location</label>
+                        <input name="location" value={resumeData.personal.location || ''} onChange={handlePersonalChange} className={inp} />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">LinkedIn URL</label>
+                        <input name="linkedin" value={resumeData.personal.linkedin || ''} onChange={handlePersonalChange} className={inp} placeholder="linkedin.com/in/..." />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">GitHub URL</label>
+                        <input name="github" value={resumeData.personal.github || ''} onChange={handlePersonalChange} className={inp} placeholder="github.com/..." />
+                      </div>
                     </div>
                   </div>
                 </div>
