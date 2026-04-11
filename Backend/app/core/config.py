@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE_MB: int = 10
     ALLOWED_FILE_TYPES: List[str] = ["application/pdf"]
+    SKIP_LLM_PARSING: bool = False
 
     # Cloud Storage
     STORAGE_PROVIDER: str = "local"
@@ -61,11 +62,17 @@ class Settings(BaseSettings):
     # LLM Models
     OPENAI_MODEL: str = "gpt-4o"
     ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
 
     # Embedding
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_PROVIDER: str = "huggingface"
+
+    # Job APIs
+    ADZUNA_APP_ID: Optional[str] = None
+    ADZUNA_API_KEY: Optional[str] = None
+    JOOBLE_API_KEY: Optional[str] = None
+    THEIRSTACK_API_KEY: Optional[str] = None
 
     # Vector Database
     VECTOR_DB_PROVIDER: str = "chroma"
@@ -107,7 +114,7 @@ class Settings(BaseSettings):
     SENTRY_DSN: Optional[str] = None
 
     model_config = {
-        "env_file": ".env",
+        "env_file": os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"),
         "case_sensitive": True,
         "extra": "ignore"
     }

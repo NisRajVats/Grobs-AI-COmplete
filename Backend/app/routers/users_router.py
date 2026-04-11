@@ -6,11 +6,13 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.database.session import get_db
-from app.models import User, Resume, JobApplication, SavedJob
+from app.models import User, Resume, JobApplication, SavedJob, UserSettings
 from app.schemas.user import (
     UserProfileResponse,
     UserUpdate as UserProfileUpdate,
-    DashboardStats
+    DashboardStats,
+    UserSettingsResponse,
+    UserSettingsUpdate
 )
 from app.utils.dependencies import get_current_user
 from app.utils.cache import cache_response
@@ -106,4 +108,52 @@ async def get_dashboard_stats(
         total_saved_jobs=total_saved_jobs,
         applications_by_status=applications_by_status
     )
+
+
+@router.get("/me/settings", response_model=UserSettingsResponse)
+async def get_user_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get current user's settings.
+    """
+    # Get or create settings for user
+    settings = db.query(UserSettings).filter(UserSettings.user_id == current_user.id).first()
+    
+    if not settings:
+        # Create default settings
+        settings = UserSettings(user_id=current_user.id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    
+    return settings
+
+
+@router.put("/me/settings", response_model=UserSettingsResponse)
+async def update_user_settings(
+    settings_data: UserSettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update current user's settings.
+    """
+    # Get or create settings for user
+    settings = db.query(UserSettings).filter(UserSettings.user_id == current_user.id).first()
+    
+    if not settings:
+        settings = UserSettings(user_id=current_user.id)
+        db.add(settings)
+    
+    # Update only provided fields
+    update_data = settings_data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(settings, field, value)
+    
+    db.commit()
+    db.refresh(settings)
+    
+    return settings
 

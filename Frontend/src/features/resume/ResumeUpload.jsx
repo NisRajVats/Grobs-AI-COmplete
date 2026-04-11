@@ -29,27 +29,46 @@ const ResumeUpload = () => {
       const response = await resumeAPI.uploadResume(file, file.name, null);
       const resumeId = response.data.id;
       
-      // Run full pipeline in background
-      try {
-        const pipelineRes = await resumeAPI.processResumePipeline(resumeId);
-        setUploadedResume({
-          id: resumeId,
-          filename: file.name,
-          status: 'processed',
-          parsed_data: pipelineRes.data.parsed_data
-        });
-      } catch (pipelineErr) {
-        console.error("Pipeline error:", pipelineErr);
-        setUploadedResume({
-          id: resumeId,
-          filename: file.name,
-          status: 'uploaded'
-        });
-      }
+      // Poll pipeline status
+      let consecutiveErrors = 0;
+      const interval = setInterval(async () => {
+        try {
+          const status = await resumeAPI.getPipelineStatus(resumeId);
+          setUploadProgress(status.data.progress || 0);
+          consecutiveErrors = 0; // Reset on success
+          
+          if (status.data.stages?.matched || status.data.progress >= 100 || status.data.status === 'complete') {
+            clearInterval(interval);
+            
+            // Fetch the full resume data to show extracted info
+            try {
+              const resumeRes = await resumeAPI.getResume(resumeId);
+              setUploadedResume(resumeRes.data);
+            } catch (err) {
+              console.error('Failed to fetch processed resume:', err);
+              setUploadedResume({
+                id: resumeId,
+                filename: file.name,
+                status: 'complete'
+              });
+            }
+            setIsUploading(false);
+          }
+        } catch (e) {
+          console.error('Status poll error:', e);
+          consecutiveErrors++;
+          
+          // Stop polling if we get too many consecutive errors (e.g. 429 or network down)
+          if (consecutiveErrors > 5) {
+            clearInterval(interval);
+            setIsUploading(false);
+            setError('Lost connection to processing server. Please check your network or try again later.');
+          }
+        }
+      }, 3000); // Slightly slower polling to be safer
     } catch (err) {
-      console.error("Upload error:", err);
+      console.error('Upload failed:', err);
       setError(err.response?.data?.detail || 'Failed to upload resume. Please try again.');
-    } finally {
       setIsUploading(false);
     }
   };
@@ -127,14 +146,16 @@ const ResumeUpload = () => {
                 <Sparkles size={18} className="text-blue-400" /> Extracted Information
               </h4>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><span className="text-slate-500">Name:</span> <span className="text-white ml-2">{uploadedResume.parsed_data.name}</span></div>
-                <div><span className="text-slate-500">Email:</span> <span className="text-white ml-2">{uploadedResume.parsed_data.email}</span></div>
+                <div><span className="text-slate-500">Name:</span> <span className="text-white ml-2">{uploadedResume.parsed_data.full_name || uploadedResume.full_name}</span></div>
+                <div><span className="text-slate-500">Email:</span> <span className="text-white ml-2">{uploadedResume.parsed_data.email || uploadedResume.email}</span></div>
               </div>
               <div>
                 <span className="text-slate-500 text-sm">Skills Detected:</span>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {uploadedResume.parsed_data.skills?.map((skill, i) => (
-                    <span key={i} className="px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-sm">{skill}</span>
+                    <span key={i} className="px-3 py-1 bg-blue-500/20 border border-blue-500/30 rounded-full text-blue-400 text-sm">
+                      {typeof skill === 'object' ? skill.name : skill}
+                    </span>
                   ))}
                 </div>
               </div>

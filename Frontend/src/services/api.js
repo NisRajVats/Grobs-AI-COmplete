@@ -93,6 +93,8 @@ export const usersAPI = {
   getProfile: () => api.get('/api/users/me'),
   updateProfile: (data) => api.put('/api/users/me', data),
   getDashboardStats: () => api.get('/api/users/me/dashboard-stats'),
+  getSettings: () => api.get('/api/users/me/settings'),
+  updateSettings: (data) => api.put('/api/users/me/settings', data),
 };
 
 // Resume API calls
@@ -118,6 +120,7 @@ export const resumeAPI = {
   getResumeVersions: (id) => api.get(`/api/resumes/${id}/versions`),
   downloadResume: (id) => api.get(`/api/resumes/${id}/download`, { responseType: 'blob' }),
   getResumePreview: (id) => api.get(`/api/resumes/${id}/preview`),
+  getPipelineStatus: (id) => api.get(`/api/resumes/${id}/pipeline-status`),
   processResumePipeline: (id) => api.post(`/api/resumes/${id}/process-pipeline`),
   atsCheck: (id, jobDescription) => api.post(`/api/resumes/${id}/ats-check`, { job_description: jobDescription }),
   optimizeResume: (id, optimizationType, jobDescription = "", jobId = null, saveAsNew = false) => 
@@ -151,6 +154,7 @@ export const jobsAPI = {
   getJob: (id) => api.get(`/api/jobs/${id}`),
   searchJobs: (query, limit = 50) => api.get(`/api/jobs/search?q=${encodeURIComponent(query)}&limit=${limit}`),
   getJobRecommendations: (resumeId, limit = 10) => api.get(`/api/jobs/recommendations/match?resume_id=${resumeId}&limit=${limit}`),
+  getLiveJobRecommendations: (resumeId) => api.get(`/api/jobs/live/search?resume_id=${resumeId}`),
   getSavedJobs: () => api.get('/api/jobs/saved'),
   saveJob: (jobId) => api.post(`/api/jobs/saved/${jobId}`),
   unsaveJob: (jobId) => api.delete(`/api/jobs/saved/${jobId}`),
@@ -175,7 +179,7 @@ export const analyticsAPI = {
 
 // Evaluation API calls
 export const evaluationAPI = {
-  runEvaluation: () => api.post('/api/evaluation/run'),
+  runEvaluation: (method = 'heuristic') => api.post(`/api/evaluation/run?method=${method}`),
 };
 
 // Notifications API calls

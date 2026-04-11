@@ -5,6 +5,7 @@ Run this once to initialize the database with sample data.
 """
 import os
 import sys
+import asyncio
 
 # Add the parent directory to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -12,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.database.session import engine, Base, SessionLocal
 import app.models  # Import all models
 
-def setup():
+async def main_async():
     print("Setting up GrobsAI Backend...")
     
     # Create all tables
@@ -29,12 +30,16 @@ def setup():
         
         if job_count == 0:
             print("Fetching real jobs from Greenhouse and Lever APIs...")
-            ingested = ingest_all_jobs(db)
-            if ingested == 0:
-                print("API fetch returned no jobs. Seeding sample jobs as fallback...")
+            try:
+                ingested = await ingest_all_jobs(db)
+                if ingested == 0:
+                    print("API fetch returned no jobs. Seeding sample jobs as fallback...")
+                    seed_jobs(db)
+                else:
+                    print(f"Successfully ingested {ingested} real jobs!")
+            except Exception as e:
+                print(f"Error fetching real jobs: {e}. Seeding sample jobs as fallback...")
                 seed_jobs(db)
-            else:
-                print(f"Successfully ingested {ingested} real jobs!")
         else:
             print(f"Database already has {job_count} jobs, skipping seed.")
         
@@ -58,7 +63,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$150,000 - $200,000",
             "job_description": "We are looking for a Senior Software Engineer to join our growing team. You will work on building scalable backend services using Python, FastAPI, and PostgreSQL. Experience with cloud platforms (AWS/GCP) is required. Strong understanding of microservices architecture and RESTful API design. 5+ years of professional software development experience.",
-            "skills_required": '["Python", "FastAPI", "PostgreSQL", "AWS", "Docker", "Kubernetes"]',
+            "skills_required": ["Python", "FastAPI", "PostgreSQL", "AWS", "Docker", "Kubernetes"],
             "posted_date": (datetime.now() - timedelta(days=2)).isoformat(),
             "source": "Sample"
         },
@@ -69,7 +74,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$100,000 - $140,000",
             "job_description": "Join our team as a Frontend Developer. Build modern, responsive web applications using React, TypeScript, and Tailwind CSS. Work closely with designers and backend engineers. Experience with state management (Redux/Zustand) and REST API integration required. 3+ years of React development experience.",
-            "skills_required": '["React", "TypeScript", "Tailwind CSS", "Redux", "REST APIs"]',
+            "skills_required": ["React", "TypeScript", "Tailwind CSS", "Redux", "REST APIs"],
             "posted_date": (datetime.now() - timedelta(days=1)).isoformat(),
             "source": "Sample"
         },
@@ -80,7 +85,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$130,000 - $170,000",
             "job_description": "We're hiring a Full Stack Engineer to help build our product platform. You'll work on both frontend (React/Next.js) and backend (Node.js/Python) code. Database design experience with PostgreSQL and MongoDB. 4+ years of full stack development. CI/CD pipeline experience a plus.",
-            "skills_required": '["React", "Node.js", "Python", "PostgreSQL", "MongoDB", "Docker"]',
+            "skills_required": ["React", "Node.js", "Python", "PostgreSQL", "MongoDB", "Docker"],
             "posted_date": (datetime.now() - timedelta(hours=5)).isoformat(),
             "source": "Sample"
         },
@@ -91,7 +96,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$120,000 - $160,000",
             "job_description": "Looking for a Data Scientist to extract insights from large datasets. Build machine learning models for predictive analytics. Experience with Python (pandas, scikit-learn, TensorFlow), SQL, and data visualization tools required. 3+ years in data science or related field.",
-            "skills_required": '["Python", "Machine Learning", "SQL", "TensorFlow", "Pandas", "Data Visualization"]',
+            "skills_required": ["Python", "Machine Learning", "SQL", "TensorFlow", "Pandas", "Data Visualization"],
             "posted_date": (datetime.now() - timedelta(days=3)).isoformat(),
             "source": "Sample"
         },
@@ -102,7 +107,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$140,000 - $180,000",
             "job_description": "Join our DevOps team to build and maintain cloud infrastructure. Manage AWS/GCP environments, implement CI/CD pipelines, and ensure system reliability. Strong expertise in Kubernetes, Docker, Terraform, and Infrastructure as Code required. 4+ years DevOps/SRE experience.",
-            "skills_required": '["AWS", "GCP", "Kubernetes", "Docker", "Terraform", "CI/CD", "Linux"]',
+            "skills_required": ["AWS", "GCP", "Kubernetes", "Docker", "Terraform", "CI/CD", "Linux"],
             "posted_date": datetime.now().isoformat(),
             "source": "Sample"
         },
@@ -113,7 +118,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$160,000 - $220,000",
             "job_description": "Build production-grade ML systems for our AI products. Design and deploy ML pipelines, work with LLMs, and optimize model performance. Experience with PyTorch, MLflow, and vector databases required. Background in NLP and transformer models preferred.",
-            "skills_required": '["Python", "PyTorch", "MLflow", "LLMs", "NLP", "Vector Databases"]',
+            "skills_required": ["Python", "PyTorch", "MLflow", "LLMs", "NLP", "Vector Databases"],
             "posted_date": (datetime.now() - timedelta(hours=12)).isoformat(),
             "source": "Sample"
         },
@@ -124,7 +129,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$110,000 - $150,000",
             "job_description": "Lead product strategy and roadmap for our core platform. Work with engineering, design, and business teams to build features users love. Data-driven mindset with experience in A/B testing and product analytics. 3+ years of PM experience in tech.",
-            "skills_required": '["Product Strategy", "Roadmapping", "Agile", "Data Analysis", "SQL", "User Research"]',
+            "skills_required": ["Product Strategy", "Roadmapping", "Agile", "Data Analysis", "SQL", "User Research"],
             "posted_date": (datetime.now() - timedelta(days=4)).isoformat(),
             "source": "Sample"
         },
@@ -135,7 +140,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$130,000 - $170,000",
             "job_description": "Build high-performance backend services. Design RESTful APIs, work with message queues (Redis/Celery), and optimize database performance. Strong Python (FastAPI/Django), PostgreSQL, and Redis experience required. Experience with microservices a plus.",
-            "skills_required": '["Python", "FastAPI", "Django", "PostgreSQL", "Redis", "Celery", "REST APIs"]',
+            "skills_required": ["Python", "FastAPI", "Django", "PostgreSQL", "Redis", "Celery", "REST APIs"],
             "posted_date": (datetime.now() - timedelta(days=2)).isoformat(),
             "source": "Sample"
         },
@@ -146,7 +151,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$120,000 - $160,000",
             "job_description": "Develop native iOS applications using Swift and SwiftUI. Work on a user-facing consumer app with millions of users. Experience with REST API integration, Core Data, and App Store deployment required. 3+ years iOS development experience.",
-            "skills_required": '["Swift", "SwiftUI", "iOS", "Core Data", "REST APIs", "Xcode"]',
+            "skills_required": ["Swift", "SwiftUI", "iOS", "Core Data", "REST APIs", "Xcode"],
             "posted_date": (datetime.now() - timedelta(days=5)).isoformat(),
             "source": "Sample"
         },
@@ -157,7 +162,7 @@ def seed_jobs(db):
             "job_type": "Full-time",
             "salary_range": "$180,000 - $240,000",
             "job_description": "Design and implement enterprise cloud architectures. Lead cloud migration projects, define architectural standards, and mentor junior engineers. AWS/Azure/GCP certification required. 8+ years of IT/cloud experience with proven large-scale architecture.",
-            "skills_required": '["AWS", "Azure", "GCP", "Architecture", "Terraform", "Security", "Networking"]',
+            "skills_required": ["AWS", "Azure", "GCP", "Architecture", "Terraform", "Security", "Networking"],
             "posted_date": (datetime.now() - timedelta(days=1)).isoformat(),
             "source": "Sample"
         }
@@ -172,4 +177,4 @@ def seed_jobs(db):
 
 
 if __name__ == "__main__":
-    setup()
+    asyncio.run(main_async())

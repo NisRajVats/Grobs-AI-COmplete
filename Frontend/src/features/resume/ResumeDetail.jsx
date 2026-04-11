@@ -123,7 +123,7 @@ const ResumeDetail = () => {
     },
   ];
 
-  const score = resume?.latest_analysis?.score || 0;
+  const score = resume?.latest_analysis?.score || resume?.ats_score || 0;
   const circumference = 2 * Math.PI * 54;
   const offset = circumference - (circumference * score) / 100;
 

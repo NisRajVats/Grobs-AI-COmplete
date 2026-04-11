@@ -21,6 +21,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { jobsAPI, resumeAPI } from '../../services/api';
 
+// Helper: error messages that indicate missing processing
+const PROCESSING_ERRORS = [
+  'Resume not found or not fully processed',
+  'Resume may be missing required data (skills, embeddings). Try re-uploading or processing your resume.',
+  'Resume not found after parsing',
+  'Resume not parsed yet',
+  'Resume has insufficient data for optimization. Please add content to your resume first.'
+];
+
 const RecommendedJobs = () => {
   const navigate = useNavigate();
   const [resumes, setResumes] = useState([]);
@@ -31,6 +40,8 @@ const RecommendedJobs = () => {
   const [error, setError] = useState(null);
   const [savedJobIds, setSavedJobIds] = useState(new Set());
   const [savingJobId, setSavingJobId] = useState(null);
+  const [processingResume, setProcessingResume] = useState(false);
+  const [processMessage, setProcessMessage] = useState("");
 
   const fetchResumes = useCallback(async () => {
     try {
@@ -58,19 +69,81 @@ const RecommendedJobs = () => {
 
   const fetchRecommendations = useCallback(async (resumeId) => {
     if (!resumeId) return;
-    
     setFetchingRecs(true);
     setError(null);
     try {
-      const response = await jobsAPI.getJobRecommendations(resumeId, 15);
-      setRecommendations(response.data.recommendations || []);
+        // Try to get live recommendations first for "actual intelligent job opportunities"
+        const response = await jobsAPI.getLiveJobRecommendations(resumeId);
+        const liveJobs = response.data.jobs || [];
+        
+        if (liveJobs.length > 0) {
+          // Map live job results to the format expected by the UI
+          const mappedRecommendations = liveJobs.map(j => ({
+            job: {
+              id: j.job_link, // Use link as ID since these aren't in DB yet
+              job_title: j.job_title,
+              company_name: j.company_name,
+              location: j.location,
+              job_link: j.job_link,
+              source: j.source,
+              job_description: j.job_description,
+              posted_date: j.posted_date,
+              salary_range: j.salary_range,
+              job_type: 'Full-time'
+            },
+            match_score: j.match_probability,
+            selection_probability: j.selection_probability || 'Match',
+            selection_chance: j.selection_chance || 'Unknown',
+            missing_keywords: []
+          }));
+          setRecommendations(mappedRecommendations);
+        } else {
+          // Fallback to database-based matches if live search returns nothing
+          const dbResponse = await jobsAPI.getJobRecommendations(resumeId, 15);
+          setRecommendations(dbResponse.data.recommendations || []);
+          
+          if ((dbResponse.data.recommendations || []).length === 0) {
+            setError("No matching jobs found. Try updating your resume or skills.");
+          }
+        }
     } catch (err) {
       console.error("Error fetching recommendations:", err);
-      setError("Failed to load job recommendations. The AI might still be processing your resume.");
+      // Try fallback on error
+      try {
+        const dbResponse = await jobsAPI.getJobRecommendations(resumeId, 15);
+        setRecommendations(dbResponse.data.recommendations || []);
+      } catch {
+        let msg = "Failed to load job recommendations. Please try again.";
+        if (err.response?.status === 404) {
+          msg = "Resume not found or not fully processed.";
+        }
+        setError(msg);
+      }
     } finally {
       setFetchingRecs(false);
     }
   }, []);
+
+  // Handler to process resume pipeline
+  const handleProcessResume = async () => {
+    if (!selectedResumeId) return;
+    setProcessingResume(true);
+    setProcessMessage("Processing your resume. This may take up to a minute...");
+    try {
+      const res = await resumeAPI.processResumePipeline(selectedResumeId);
+      setProcessMessage(res.data?.message || "Resume processing started. Please wait and refresh recommendations.");
+      // Optionally, poll for status or just refetch recommendations after a delay
+      setTimeout(() => {
+        fetchRecommendations(selectedResumeId);
+        setProcessingResume(false);
+        setProcessMessage("");
+      }, 6000);
+    } catch {
+      setProcessMessage("");
+      setProcessingResume(false);
+      setError("Failed to process resume. Please try again or contact support.");
+    }
+  };
 
   useEffect(() => {
     fetchResumes();
@@ -119,7 +192,7 @@ const RecommendedJobs = () => {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+      <div className="flex flex-col items-center justify-center min-h-100 space-y-4">
         <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
         <p className="text-slate-400 animate-pulse">Analyzing your profile...</p>
       </div>
@@ -178,7 +251,7 @@ const RecommendedJobs = () => {
           </p>
         </div>
 
-        <div className="flex flex-col space-y-2 min-w-[240px]">
+        <div className="flex flex-col space-y-2 min-w-60">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Selected Resume</label>
           <div className="relative">
             <select 
@@ -200,18 +273,39 @@ const RecommendedJobs = () => {
       </div>
 
       {error && (
-        <div className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400">
-          <AlertCircle size={20} />
-          <p className="text-sm font-medium">{error}</p>
+        <div className="flex flex-col gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400">
+          <div className="flex items-center gap-3">
+            <AlertCircle size={20} />
+            <p className="text-sm font-medium">{error}</p>
+          </div>
+          {PROCESSING_ERRORS.some(msg => error.includes(msg)) && (
+            <button
+              onClick={handleProcessResume}
+              disabled={processingResume}
+              className="w-full md:w-auto px-8 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {processingResume ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />} {processingResume ? 'Processing...' : 'Process Resume'}
+            </button>
+          )}
+          {processMessage && (
+            <div className="text-xs text-blue-400 font-bold mt-2">{processMessage}</div>
+          )}
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
           <div className="flex items-center justify-between px-2">
-            <h3 className="text-sm font-black text-slate-500 uppercase tracking-[0.2em]">
-              {fetchingRecs ? 'Analyzing Market...' : `Top ${recommendations.length} AI Matches`}
-            </h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-sm font-black text-slate-500 uppercase tracking-[0.2em]">
+                {fetchingRecs ? 'Analyzing Market...' : `Top ${recommendations.length} AI Matches`}
+              </h3>
+              {!fetchingRecs && recommendations.some(r => ['Adzuna', 'Jooble', 'TheirStack'].includes(r.job.source)) && (
+                <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-md border border-emerald-500/20 animate-pulse">
+                  LIVE DATA
+                </span>
+              )}
+            </div>
             <button 
               onClick={() => fetchRecommendations(selectedResumeId)}
               disabled={fetchingRecs}
@@ -285,7 +379,7 @@ const RecommendedJobs = () => {
                     >
                       {/* Match Score Indicator */}
                       <div className="absolute top-0 right-0 pt-4 pr-4">
-                        <div className="flex flex-col items-end">
+                        <div className="flex flex-col items-end gap-2">
                           <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${
                             match.match_score >= 80 ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
                             match.match_score >= 60 ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
@@ -294,6 +388,16 @@ const RecommendedJobs = () => {
                             <Target size={12} />
                             {match.match_score}% Match
                           </div>
+                          {match.selection_probability && (
+                            <div className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-tighter flex items-center gap-1 ${
+                              match.selection_chance === 'High' ? 'text-green-400 bg-green-400/5' :
+                              match.selection_chance === 'Medium' ? 'text-amber-400 bg-amber-400/5' :
+                              'text-slate-500 bg-slate-500/5'
+                            }`}>
+                              <Sparkles size={10} />
+                              {match.selection_probability} ({match.selection_chance})
+                            </div>
+                          )}
                         </div>
                       </div>
 

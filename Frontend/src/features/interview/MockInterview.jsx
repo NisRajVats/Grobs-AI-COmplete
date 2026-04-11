@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowRight, Zap, Mic, Video, MessageSquare, Send, RefreshCw, CheckCircle2, XCircle, Play, Pause, Volume2 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -23,32 +23,38 @@ const MockInterview = () => {
     question_count: 5,
     interview_type: 'mixed'
   });
+  const [error, setError] = useState(null);
   
   const timerRef = useRef(null);
   const [timeElapsed, setTimeElapsed] = useState(0);
+  const isSubmittingRef = useRef(false); // Prevent double submissions
 
   // Load existing session if sessionId provided
   useEffect(() => {
     if (sessionId) {
       loadSession(sessionId);
     }
-  }, [sessionId]);
+  }, [sessionId, loadSession]);
 
-  // Timer for answer duration
+  // Timer for answer duration - improved cleanup
   useEffect(() => {
-    if (!showSetup && session?.status === 'in_progress') {
+    if (!showSetup && session?.status === 'in_progress' && !showFeedback) {
       timerRef.current = setInterval(() => {
         setTimeElapsed(prev => prev + 1);
       }, 1000);
     }
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [showSetup, session?.status]);
+  }, [showSetup, session?.status, showFeedback]);
 
-  const loadSession = async (id) => {
+  const loadSession = useCallback(async (id) => {
     try {
       setLoading(true);
+      setError(null);
       const response = await api.get(`/api/interview/sessions/${id}`);
       setSession(response.data);
       
@@ -60,10 +66,11 @@ const MockInterview = () => {
       setCurrentQuestionIndex(response.data.current_question_index || 0);
     } catch (error) {
       console.error("Error loading session:", error);
+      setError('Failed to load interview session. Please try again.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const startNewSession = async () => {
     try {
@@ -98,13 +105,19 @@ const MockInterview = () => {
   };
 
   const submitAnswer = async () => {
-    if (!answer.trim()) return;
+    if (!answer.trim() || loading || isSubmittingRef.current) return;
     
     const currentQuestion = questions[currentQuestionIndex];
     if (!currentQuestion) return;
 
+    // Prevent double submissions
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
     try {
       setLoading(true);
+      setError(null);
+      
       await api.post(`/api/interview/sessions/${session.id}/answer`, {
         question_id: currentQuestion.id,
         answer_text: answer,
@@ -116,16 +129,20 @@ const MockInterview = () => {
       setShowFeedback(true);
     } catch (error) {
       console.error("Error submitting answer:", error);
+      const errorMessage = error.response?.data?.detail || 'Failed to submit answer';
+      setError(errorMessage);
+      
       // Fallback feedback if needed
       setFeedback({
         score: 70,
-        feedback: "Good attempt! (Simulated feedback)",
+        feedback: "Good attempt! (Simulated feedback due to connection issue)",
         strengths: ["Clear communication"],
         suggested_improvements: ["Add more details"]
       });
       setShowFeedback(true);
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -136,30 +153,31 @@ const MockInterview = () => {
       setTimeElapsed(0);
       setFeedback(null);
       setShowFeedback(false);
+      setError(null);
     } else {
       // Complete session
       await completeSession();
     }
   };
 
-  const getFeedback = async (questionId) => {
+  const getFeedback = useCallback(async (questionId) => {
     try {
       const response = await api.post(`/api/interview/sessions/${session.id}/feedback/${questionId}`);
       setFeedback(response.data.answer);
     } catch (error) {
       console.error("Error getting feedback:", error);
-      // Mock feedback
+      // Mock feedback with more realistic data
       setFeedback({
         score: Math.floor(Math.random() * 30) + 60,
-        feedback: "Good attempt! Consider adding more specific examples.",
+        feedback: "Good attempt! Consider adding more specific examples and quantifiable results.",
         strengths: ["Clear communication", "Structured response"],
         improvements: ["Add more quantifiable metrics", "Be more specific about your role"],
-        suggested_improvements: ["Use the STAR method more explicitly"]
+        suggested_improvements: ["Use the STAR method more explicitly", "Include specific outcomes"]
       });
     }
-  };
+  }, [session.id]);
 
-  const completeSession = async () => {
+  const completeSession = useCallback(async () => {
     try {
       const response = await api.post(`/api/interview/sessions/${session.id}/complete`);
       setSession(response.data.session);
@@ -167,7 +185,7 @@ const MockInterview = () => {
       console.error("Error completing session:", error);
       setSession(prev => ({ ...prev, status: 'completed', overall_score: 75 }));
     }
-  };
+  }, [session.id]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);

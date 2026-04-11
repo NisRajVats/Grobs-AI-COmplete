@@ -13,7 +13,7 @@ const ProfileEdit = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [formData, setFormData] = useState({
-    full_name: '', email: '', phone: '', location: '', title: '', linkedin_url: '', avatar_url: ''
+    full_name: '', email: '', phone: '', location: '', title: '', linkedin_url: '', avatar_url: '', bio: '', website: '', experience_level: ''
   });
 
   useEffect(() => {
@@ -28,7 +28,10 @@ const ProfileEdit = () => {
           location: u.location || '',
           title: u.title || '',
           linkedin_url: u.linkedin_url || '',
-          avatar_url: u.avatar_url || ''
+          avatar_url: u.avatar_url || '',
+          bio: u.bio || '',
+          website: u.website || '',
+          experience_level: u.experience_level || ''
         });
       } catch { setError('Failed to load profile.'); }
       finally { setLoading(false); }
@@ -47,7 +50,10 @@ const ProfileEdit = () => {
         location: formData.location,
         title: formData.title,
         linkedin_url: formData.linkedin_url,
-        avatar_url: formData.avatar_url
+        avatar_url: formData.avatar_url,
+        bio: formData.bio,
+        website: formData.website,
+        experience_level: formData.experience_level
       };
       await usersAPI.updateProfile(updatedProfile);
       updateUser(updatedProfile);
@@ -65,7 +71,9 @@ const ProfileEdit = () => {
     { label: 'Phone', name: 'phone', icon: Phone, type: 'text', placeholder: '+1 234 567 890' },
     { label: 'Location', name: 'location', icon: MapPin, type: 'text', placeholder: 'City, Country' },
     { label: 'Job Title', name: 'title', icon: Briefcase, type: 'text', placeholder: 'e.g. Software Engineer' },
+    { label: 'Experience Level', name: 'experience_level', icon: Briefcase, type: 'text', placeholder: 'e.g. Entry, Mid, Senior, Lead' },
     { label: 'LinkedIn URL', name: 'linkedin_url', icon: User, type: 'url', placeholder: 'https://linkedin.com/in/...' },
+    { label: 'Website/Portfolio', name: 'website', icon: User, type: 'url', placeholder: 'https://yourwebsite.com' },
     { label: 'Avatar URL', name: 'avatar_url', icon: User, type: 'url', placeholder: 'https://...' },
   ];
 
@@ -106,6 +114,19 @@ const ProfileEdit = () => {
             </div>
           </div>
         ))}
+        
+        {/* Bio/Summary field - textarea */}
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Bio / Summary</label>
+          <textarea
+            name="bio"
+            value={formData.bio}
+            onChange={handleChange}
+            placeholder="Tell us about yourself, your skills, and career goals..."
+            rows={4}
+            className="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-white text-sm focus:ring-2 focus:ring-blue-500/30 resize-none"
+          />
+        </div>
       </div>
 
       <div className="flex gap-3">

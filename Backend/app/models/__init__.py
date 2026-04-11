@@ -1,5 +1,5 @@
 # Models package initialization
-from .user import User
+from .user import User, SubscriptionPlan, UserSubscription, UserSettings
 from .resume import Resume, ResumeVersion, ResumeAnalysis, ResumeContent, ResumeEmbedding
 from .education import Education
 from .experience import Experience
@@ -12,6 +12,9 @@ from .calendar import CalendarEvent
 
 __all__ = [
     'User',
+    'SubscriptionPlan',
+    'UserSubscription',
+    'UserSettings',
     'Resume', 
     'ResumeVersion',
     'ResumeAnalysis', 

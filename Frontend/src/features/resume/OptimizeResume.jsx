@@ -17,15 +17,28 @@ const OptimizeResume = () => {
   const [error, setError] = useState(null);
 
   const handleOptimize = async () => {
+    if (activeTab === 'job' && !jobDescription.trim()) {
+      setError("Please provide a job description for tailored optimization.");
+      return;
+    }
     setOptimizing(true); 
     setError(null);
     try {
       // If general tab is active, we don't send job description even if it was typed
       const jdToSend = activeTab === 'job' ? jobDescription : '';
-      const res = await resumeAPI.optimizeResume(resumeId, 'comprehensive', jdToSend);
-      setResult(res.data);
+      const optimizationType = activeTab === 'job' ? 'job_tailored' : 'comprehensive';
+      const res = await resumeAPI.optimizeResume(resumeId, optimizationType, jdToSend);
+      
+      const result = res.data;
+      if (result.success) {
+        setResult(result);
+      } else {
+        setError(result.error || 'Optimization failed. Make sure your resume has content.');
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Optimization failed. Make sure your resume has content.');
+      console.error("Optimization failed:", err);
+      const backendError = err.response?.data?.error || err.response?.data?.detail;
+      setError(backendError || 'Optimization failed. Please check your connection and try again.');
     } finally { 
       setOptimizing(false); 
     }

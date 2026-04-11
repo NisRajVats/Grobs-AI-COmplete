@@ -3,9 +3,5 @@ from app.workers.base_worker import create_celery_app
 # Create Celery app instance
 celery = create_celery_app()
 
-# If celery is not available, we should provide a mock for it to avoid errors during import
-if celery is None:
-    class MockCelery:
-        def task(self, *args, **kwargs):
-            return lambda f: f
-    celery = MockCelery()
+# Celery app ready for production (remove mock for active use)
+# Broker/result backend config in base_worker.get_celery_config()

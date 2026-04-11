@@ -43,15 +43,38 @@ def get_password_hash(password: str) -> str:
 def generate_strong_password(length: int = 16) -> str:
     """
     Generate a cryptographically strong random password.
+    Guarantees at least one lowercase, one uppercase, one digit, and one special character.
     
     Args:
-        length: Password length
+        length: Password length (minimum 8 recommended)
         
     Returns:
         Random password string
     """
-    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+    if length < 4:
+        length = 4
+        
+    lowercase = "abcdefghijklmnopqrstuvwxyz"
+    uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    digits = "0123456789"
+    special = "!@#$%^&*"
+    
+    # Ensure at least one of each
+    password = [
+        secrets.choice(lowercase),
+        secrets.choice(uppercase),
+        secrets.choice(digits),
+        secrets.choice(special)
+    ]
+    
+    # Fill the rest
+    alphabet = lowercase + uppercase + digits + special
+    password += [secrets.choice(alphabet) for _ in range(length - 4)]
+    
+    # Shuffle the result
+    secrets.SystemRandom().shuffle(password)
+    
+    return ''.join(password)
 
 
 # ==================== JWT Configuration ====================
@@ -129,7 +152,8 @@ def create_access_token(
     )
     to_encode.update({
         "exp": expire,
-        "token_type": "access"
+        "token_type": "access",
+        "jti": secrets.token_hex(16)  # Add unique ID for token uniqueness
     })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -180,7 +204,8 @@ def create_refresh_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({
         "exp": expire,
-        "token_type": "refresh"
+        "token_type": "refresh",
+        "jti": secrets.token_hex(16)  # Add unique ID for token uniqueness
     })
     encoded_jwt = jwt.encode(to_encode, REFRESH_SECRET_KEY, algorithm=ALGORITHM)
     

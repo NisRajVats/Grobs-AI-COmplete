@@ -129,14 +129,11 @@ def _build_resume_for_ats(resume: Resume, content: ResumeContent):
     return ResumeForATS(resume, content)
 
 
-# Celery task wrapper (if Celery is available)
-try:
-    from celery import Celery
-    celery_app = Celery('ats_analysis_worker')
-    
-    @celery_app.task(name='ats_analysis_worker.process')
+from app.workers.celery_app import celery
+
+# Celery task wrapper
+if celery:
+    @celery.task(name='ats_analysis_worker.process')
     def celery_process_ats_analysis(resume_id: int, user_id: int, job_description: str = ""):
         return process_ats_analysis(resume_id, user_id, job_description)
-except ImportError:
-    pass
 

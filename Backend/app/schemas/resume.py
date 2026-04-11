@@ -5,7 +5,7 @@ Pydantic models for resume endpoints.
 """
 import json
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Any, Union
+from typing import Optional, List, Any, Union, Dict
 from datetime import datetime
 from app.utils.encryption import decrypt
 
@@ -82,10 +82,20 @@ class ProjectBase(BaseModel):
     @field_validator('technologies', mode='before')
     @classmethod
     def validate_technologies(cls, v):
-        """Coerce list of technologies to string if needed."""
+        """Coerce technologies to string if needed, handling various input types."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
         if isinstance(v, list):
             return ", ".join([str(item) for item in v])
-        return v
+        if isinstance(v, (int, float, bool)):
+            return str(v)
+        if isinstance(v, dict):
+            # Handle case where technologies might be passed as a dict
+            return str(v)
+        # For any other type, convert to string
+        return str(v) if v is not None else None
 
 
 class ProjectCreate(ProjectBase):
@@ -154,6 +164,8 @@ class ResumeUpdate(BaseModel):
     template_name: Optional[str] = None
     parsed_data: Optional[Any] = None
     status: Optional[str] = None
+    ats_score: Optional[int] = None
+    analysis_score: Optional[int] = None
     education: Optional[List[EducationCreate]] = []
     experience: Optional[List[ExperienceCreate]] = []
     projects: Optional[List[ProjectCreate]] = []
@@ -221,6 +233,18 @@ class ResumeResponse(BaseModel):
             elif isinstance(obj.parsed_data, dict):
                 pd = obj.parsed_data
         
+        # Deep decrypt parsed_data to handle any legacy double-encryption or misplaced tokens
+        def deep_decrypt(data):
+            if isinstance(data, dict):
+                return {k: deep_decrypt(v) for k, v in data.items()}
+            elif isinstance(data, list):
+                return [deep_decrypt(i) for i in data]
+            elif isinstance(data, str) and "gaaaaa" in data.lower():
+                return decrypt(data)
+            return data
+            
+        pd = deep_decrypt(pd)
+        
         # Sync decrypted fields for preview consistency
         pd.update({
             'full_name': data['full_name'],
@@ -260,17 +284,21 @@ class ResumeDetailResponse(ResumeResponse):
         data['projects'] = [ProjectCreate.model_validate(e) for e in obj.projects]
         data['skills'] = [SkillCreate.model_validate(e) for e in obj.skills]
         
-        # Sync structured sections into parsed_data
+        # Sync structured sections into parsed_data if they are not empty
         pd = data.get('parsed_data')
         if not isinstance(pd, dict):
             pd = {}
         
-        pd.update({
-            'education': [e.model_dump() for e in data['education']],
-            'experience': [e.model_dump() for e in data['experience']],
-            'projects': [e.model_dump() for e in data['projects']],
-            'skills': [e.model_dump() for e in data['skills']]
-        })
+        # Don't clobber if we already have it in pd and current fields are empty
+        if data['education'] or 'education' not in pd:
+            pd['education'] = [e.model_dump() for e in data['education']]
+        if data['experience'] or 'experience' not in pd:
+            pd['experience'] = [e.model_dump() for e in data['experience']]
+        if data['projects'] or 'projects' not in pd:
+            pd['projects'] = [e.model_dump() for e in data['projects']]
+        if data['skills'] or 'skills' not in pd:
+            pd['skills'] = [e.model_dump() for e in data['skills']]
+            
         data['parsed_data'] = pd
         
         # Latest analysis
@@ -346,8 +374,28 @@ class ResumeVersionResponse(BaseModel):
 
 # ==================== Resume Upload Schemas ====================
 
+class PipelineResult(BaseModel):
+    """Schema for pipeline result."""
+    resume_id: int
+    stages_completed: List[str] = []
+    stages: Optional[Dict[str, str]] = None
+    errors: List[str] = []
+    ats_score: Optional[int] = None
+    success: bool = True
+    status: Optional[str] = None
+    progress: Optional[int] = None
+    message: Optional[str] = None
+
 class ResumeUploadResponse(BaseModel):
     """Response schema for uploaded resume."""
+    id: int
+    status: str
+    message: str
+    title: str
+    pipeline: PipelineResult
+
+class ResumeUploadLegacyResponse(BaseModel):
+    """Old response schema for uploaded resume."""
     resume_id: int
     message: str
     status: str = "uploaded"
@@ -395,25 +443,29 @@ class JobMatchListResponse(BaseModel):
 
 # ==================== Resume Optimization Schemas ====================
 
+from app.services.resume_service.optimizer import OptimizationType
+
 class OptimizeResumeRequest(BaseModel):
     """Request schema for resume optimization."""
-    optimization_type: str = "comprehensive"
+    optimization_type: OptimizationType = OptimizationType.COMPREHENSIVE
     job_description: Optional[str] = ""
     job_id: Optional[int] = None
     save_as_new: bool = False
+    provider: Optional[str] = None
 
 
 class OptimizeResumeResponse(BaseModel):
     """Response schema for resume optimization."""
     success: bool
     resume_id: int
-    suggestions: str
-    improvements: List[str]
-    ats_score: int
+    error: Optional[str] = None
+    suggestions: Optional[str] = ""
+    improvements: Optional[List[str]] = []
+    ats_score: Optional[int] = 0
     original_resume: Optional[Any] = None
     optimized_resume: Optional[Any] = None
-    compatibility_score: int
-    compatibility_feedback: str
+    compatibility_score: Optional[int] = 0
+    compatibility_feedback: Optional[str] = ""
     skill_gap: Optional[List[str]] = []
     matching_skills: Optional[List[str]] = []
     skill_recommendations: Optional[List[str]] = []

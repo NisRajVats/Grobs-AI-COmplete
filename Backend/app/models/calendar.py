@@ -10,8 +10,11 @@ class CalendarEvent(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    date = Column(String, nullable=False) # Store as YYYY-MM-DD
-    time = Column(String, nullable=False) # Store as HH:MM
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    event_type = Column(String, default="interview") # interview, networking, preparation
+    date = Column(String, nullable=True) # Store as YYYY-MM-DD
+    time = Column(String, nullable=True) # Store as HH:MM
     platform = Column(String, default="Google Meet")
     type = Column(String, default="interview") # interview, networking, preparation
     status = Column(String, default="scheduled") # scheduled, completed, cancelled

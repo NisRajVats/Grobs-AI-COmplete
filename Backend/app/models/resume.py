@@ -29,6 +29,7 @@ class Resume(Base):
     
     # Resume metadata
     title = Column(String, nullable=True)  # User-defined title like "Software Engineer Resume"
+    summary = Column(Text, nullable=True)
     target_role = Column(String, nullable=True)  # Target job role
     template_name = Column(String, default="classic")
     status = Column(String, default="active")  # active, archived, optimized
@@ -41,6 +42,10 @@ class Resume(Base):
     analysis_score = Column(Integer, nullable=True)
     analysis_feedback = Column(Text, nullable=True)
     
+    # Pipeline tracking (NEW)
+    pipeline_status = Column(String, default="pending")  # pending, uploading, parsing, parsed, embedding, embedded, analyzing, analyzed, matching, completed, failed
+    pipeline_error = Column(Text, nullable=True)
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -51,7 +56,7 @@ class Resume(Base):
     education = relationship("Education", back_populates="resume", cascade="all, delete-orphan")
     experience = relationship("Experience", back_populates="resume", cascade="all, delete-orphan")
     projects = relationship("Project", back_populates="resume", cascade="all, delete-orphan")
-    skills = relationship("Skill", back_populates="resume", cascade="all, delete-orphan")
+    skills = relationship("Skill", cascade="all, delete-orphan", backref="resume")
     analyses = relationship("ResumeAnalysis", back_populates="resume", cascade="all, delete-orphan")
     # Additional relationships for scalable models
     content = relationship("ResumeContent", back_populates="resume", uselist=False, cascade="all, delete-orphan")
@@ -70,6 +75,7 @@ class ResumeVersion(Base):
     # Version info
     version_number = Column(Integer, default=1)
     version_label = Column(String, nullable=True)  # e.g., "Optimized v1", "ATS Version"
+    changes = Column(Text, nullable=True)
     
     # Whether this is an optimized version
     optimized_flag = Column(Boolean, default=False)

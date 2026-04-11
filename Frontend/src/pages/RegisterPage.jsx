@@ -43,9 +43,19 @@ const RegisterPage = () => {
       navigate('/app/dashboard');
     } catch (err) {
       console.error('Registration error:', err);
+      const status = err.response?.status;
       const rawDetail = err.response?.data?.detail;
+      
+      const errorData = rawDetail || {};
       let message = 'Registration failed. Please try again.';
-      if (typeof rawDetail === 'string') {
+      
+      if (status === 409) {
+        message = errorData.message || errorData.detail || 'Account already exists. <Link to=&#34;/login&#34;>Please login instead.</Link>';
+        // Auto-redirect to login for duplicate account
+        navigate('/login');
+      } else if (errorData.message) {
+        message = errorData.message;
+      } else if (typeof rawDetail === 'string') {
         message = rawDetail;
       } else if (Array.isArray(rawDetail)) {
         message = rawDetail.map(e => e.msg).join(', ');

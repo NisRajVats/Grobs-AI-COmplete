@@ -61,6 +61,7 @@ class LLMResponse:
     provider: str
     usage: Optional[Dict[str, int]] = None
     raw_response: Optional[Any] = None
+    is_fallback: bool = False  # Indicates if heuristic fallback was used
 
 
 @dataclass
@@ -81,21 +82,19 @@ class LLMService:
     _VALID_PROVIDERS = {"openai", "anthropic", "google", "huggingface", "local"}
 
     def __init__(self, provider: str = None):
-        """
-        Initialize LLM service.
-
-        Args:
-            provider: Preferred provider (openai, anthropic, google, huggingface, local)
-        """
+        # Use the setting, or default to "google"
         raw_provider = provider or settings.LLM_PROVIDER or "google"
-        # FIX: Validate provider name at construction time, not silently at call time
+        
+        # Normalize to lowercase to prevent "Google" vs "google" errors
+        raw_provider = raw_provider.lower() 
+        
         if raw_provider not in self._VALID_PROVIDERS:
-            logger.warning(
-                "Unknown LLM provider %r — falling back to 'google'.", raw_provider
-            )
+            logger.warning(f"Unknown LLM provider {raw_provider} — falling back to 'google'.")
             raw_provider = "google"
+            
         self.provider_name = raw_provider
-        self.cache = {} # In-memory cache for LLM responses
+        self.default_provider = raw_provider # Ensure this is set explicitly
+        self.cache = {} 
         self._initialize_providers()
 
     def _initialize_providers(self):
@@ -125,14 +124,19 @@ class LLMService:
         # Google Gemini
         logger.info(f"Initializing Google Gemini: GOOGLE_AVAILABLE={GOOGLE_AVAILABLE}, GEMINI_API_KEY={'Present' if settings.GEMINI_API_KEY else 'Missing'}")
         if GOOGLE_AVAILABLE and settings.GEMINI_API_KEY:
-            try:
-                self.google_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-                # Use gemini-2.0-flash as it is more widely available in new SDKs
-                self.google_model = settings.GEMINI_MODEL or "gemini-2.0-flash"
-                logger.info(f"Google Gemini initialized with model: {self.google_model}")
-            except Exception as e:
-                logger.error(f"Failed to initialize Google Gemini client: {e}")
+            # Check if API key is a placeholder
+            if settings.GEMINI_API_KEY == "your-gemini-api-key-here":
+                logger.warning("Gemini API key is set to placeholder value. Disabling Google Gemini.")
                 self.google_client = None
+            else:
+                try:
+                    self.google_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                    # Use gemini-2.0-flash as it is more widely available in new SDKs
+                    self.google_model = settings.GEMINI_MODEL or "gemini-2.0-flash"
+                    logger.info(f"Google Gemini initialized with model: {self.google_model}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize Google Gemini client: {e}")
+                    self.google_client = None
         else:
             self.google_client = None
 
@@ -144,6 +148,78 @@ class LLMService:
         # But for now, we just use the current settings object
         self.provider_name = settings.LLM_PROVIDER or "google"
         self._initialize_providers()
+
+    def validate_api_keys(self) -> Dict[str, Any]:
+        """
+        Validate configured API keys and return status of all providers.
+        
+        Returns:
+            Dict with provider status and recommendations
+        """
+        status = {
+            "configured_provider": self.provider_name,
+            "providers": {},
+            "active_provider": None,
+            "is_valid": False,
+            "warnings": [],
+            "recommendations": []
+        }
+        
+        # Check OpenAI
+        if OPENAI_AVAILABLE:
+            status["providers"]["openai"] = {
+                "available": True,
+                "configured": bool(settings.OPENAI_API_KEY),
+                "model": settings.OPENAI_MODEL or "gpt-4o"
+            }
+            if settings.OPENAI_API_KEY:
+                status["active_provider"] = "openai"
+        else:
+            status["providers"]["openai"] = {"available": False, "configured": False}
+        
+        # Check Anthropic
+        if ANTHROPIC_AVAILABLE:
+            status["providers"]["anthropic"] = {
+                "available": True,
+                "configured": bool(settings.ANTHROPIC_API_KEY),
+                "model": settings.ANTHROPIC_MODEL or "claude-3-5-sonnet-20241022"
+            }
+            if settings.ANTHROPIC_API_KEY and not status["active_provider"]:
+                status["active_provider"] = "anthropic"
+        else:
+            status["providers"]["anthropic"] = {"available": False, "configured": False}
+        
+        # Check Google Gemini
+        if GOOGLE_AVAILABLE:
+            status["providers"]["google"] = {
+                "available": True,
+                "configured": bool(settings.GEMINI_API_KEY),
+                "model": settings.GEMINI_MODEL or "gemini-2.0-flash"
+            }
+            if settings.GEMINI_API_KEY and not status["active_provider"]:
+                status["active_provider"] = "google"
+        else:
+            status["providers"]["google"] = {"available": False, "configured": False}
+        
+        # Determine if we have a working provider
+        if status["active_provider"]:
+            status["is_valid"] = True
+        else:
+            status["warnings"].append("No LLM provider is properly configured. Using heuristic fallback mode.")
+            status["recommendations"].append("Configure at least one LLM provider (Google Gemini recommended for free tier).")
+        
+        # Check if configured provider matches active provider
+        if self.provider_name != "local" and status["active_provider"] != self.provider_name:
+            if status["active_provider"]:
+                status["warnings"].append(
+                    f"Configured provider '{self.provider_name}' is not available. Using '{status['active_provider']}' instead."
+                )
+            else:
+                status["warnings"].append(
+                    f"Configured provider '{self.provider_name}' is not available. Using heuristic fallback mode."
+                )
+        
+        return status
 
     def generate_text(
         self,
@@ -346,6 +422,7 @@ class LLMService:
                 system_instruction=system_prompt if system_prompt else None,
                 temperature=temperature,
                 max_output_tokens=max_tokens if max_tokens else None,
+                http_options={'timeout': 30000} # 30 seconds timeout
             )
             
             response = await self.google_client.aio.models.generate_content(
@@ -360,6 +437,7 @@ class LLMService:
                 response = await self.google_client.aio.models.generate_content(
                     model=model,
                     contents=full_prompt,
+                    config=types.GenerateContentConfig(http_options={'timeout': 30000})
                 )
             except Exception as inner_e:
                 logger.error("Google Gemini async generation failed: %s", inner_e)
@@ -476,6 +554,7 @@ class LLMService:
                 system_instruction=system_prompt if system_prompt else None,
                 temperature=temperature,
                 max_output_tokens=max_tokens if max_tokens else None,
+                http_options={'timeout': 30000} # 30 seconds timeout
             )
             
             response = self.google_client.models.generate_content(
@@ -491,6 +570,7 @@ class LLMService:
                 response = self.google_client.models.generate_content(
                     model=model,
                     contents=full_prompt,
+                    config=types.GenerateContentConfig(http_options={'timeout': 30000})
                 )
             except Exception as inner_e:
                 logger.error("Google Gemini generation failed: %s", inner_e)
@@ -561,31 +641,25 @@ class LLMService:
             **kwargs,
         )
 
-        # FIX: Use local heuristic only for local/fallback providers, not for every response
+        # FIX: More robust JSON extraction - search for the first '{' and last '}'
+        # This handles preamble/postamble text from the LLM better than stripping
+        content = response.content
         result = None
-        if response.provider in ("fallback", "local"):
-            if "Extract structured information from the following resume text" in prompt or "resume text" in prompt.lower():
-                result = self._heuristic_resume_parser(prompt)
-            elif any(x in prompt.lower() for x in ["resume optimization ai", "optimize the provided resume", "resume data", "resume json", "senior recruiter", "resume optimization", "transform the resume"]):
-                result = self._heuristic_resume_optimizer(prompt)
-            elif any(x in prompt.lower() for x in ["analyze the following resume", "ats score", "ats architect", "career optimization"]):
-                result = self._heuristic_ats_analyzer(prompt)
+        
+        # If response was a fallback, return as such
+        if response.provider == "fallback":
+            return {"error": "AI service temporarily unavailable", "provider": "fallback"}
+            
+        try:
+            json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+            if json_match:
+                content = json_match.group(1)
             else:
-                result = {"error": "AI service temporarily unavailable"}
-        else:
-            content = response.content.strip()
-
-            # FIX: More robust JSON extraction - search for the first '{' and last '}'
-            try:
-                json_match = re.search(r'(\{.*\})', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(1)
-                else:
-                    # If no { } found, try stripping markdown fences as fallback
-                    content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
-                    content = re.sub(r"\s*```$", "", content.strip())
-            except Exception as e:
-                logger.warning("Error during robust JSON extraction async: %s", e)
+                # If no { } found, try stripping markdown fences as fallback
+                content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
+                content = re.sub(r"\s*```$", "", content.strip())
+        except Exception as e:
+            logger.warning("Error during robust JSON extraction async: %s", e)
 
             content = content.strip()
 
@@ -648,32 +722,25 @@ class LLMService:
             **kwargs,
         )
 
-        # FIX: Use local heuristic only for local/fallback providers, not for every response
+        # FIX: More robust JSON extraction - search for the first '{' and last '}'
+        # This handles preamble/postamble text from the LLM better than simple stripping
+        content = response.content
         result = None
-        if response.provider in ("fallback", "local"):
-            if "Extract structured information from the following resume text" in prompt or "resume text" in prompt.lower():
-                result = self._heuristic_resume_parser(prompt)
-            elif any(x in prompt.lower() for x in ["resume optimization ai", "optimize the provided resume", "resume data", "resume json", "senior recruiter", "resume optimization", "transform the resume"]):
-                result = self._heuristic_resume_optimizer(prompt)
-            elif any(x in prompt.lower() for x in ["analyze the following resume", "ats score", "ats architect", "career optimization"]):
-                result = self._heuristic_ats_analyzer(prompt)
+        
+        # If response was a fallback, return as such
+        if response.provider == "fallback":
+            return {"error": "AI service temporarily unavailable", "provider": "fallback"}
+            
+        try:
+            json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+            if json_match:
+                content = json_match.group(1)
             else:
-                result = {"error": "AI service temporarily unavailable"}
-        else:
-            content = response.content.strip()
-
-            # FIX: More robust JSON extraction - search for the first '{' and last '}'
-            # This handles preamble/postamble text from the LLM better than simple stripping
-            try:
-                json_match = re.search(r'(\{.*\})', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(1)
-                else:
-                    # If no { } found, try stripping markdown fences as fallback
-                    content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
-                    content = re.sub(r"\s*```$", "", content.strip())
-            except Exception as e:
-                logger.warning("Error during robust JSON extraction: %s", e)
+                # If no { } found, try stripping markdown fences as fallback
+                content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
+                content = re.sub(r"\s*```$", "", content.strip())
+        except Exception as e:
+            logger.warning("Error during robust JSON extraction: %s", e)
 
             content = content.strip()
 
@@ -935,6 +1002,7 @@ class LLMService:
 
     def _heuristic_resume_optimizer(self, prompt: str) -> Dict[str, Any]:
         """A heuristic optimizer for resumes when LLM is unavailable."""
+        logger.warning("Using heuristic resume optimizer fallback - results will be generic.")
         try:
             # Extract resume data from prompt - handle multiple format variations
             data_str = None
@@ -968,15 +1036,13 @@ class LLMService:
                         "experience": [],
                         "skills": ["Project Management", "Team Collaboration", "Problem Solving"]
                     },
-                    "optimization_summary": "The resume was optimized for better ATS readability and professional tone.",
+                    "optimization_summary": "The resume was optimized for better ATS readability and professional tone (Heuristic Mode).",
                     "improvements_made": ["Generated a professional summary focused on core competencies.", "Added essential industry keywords to skills section."],
-                    "projected_ats_score": 82,
-                    "compatibility_score": 75,
-                    "compatibility_feedback": "Your resume shows good potential. Consider adding more specific metrics and achievements.",
-                    "skill_gap": [],
-                    "matching_skills": [],
-                    "skill_recommendations": ["Continue developing core technical competencies."],
-                    "certificate_recommendations": ["AWS Certified Solutions Architect"]
+                    "projected_ats_score": 75,
+                    "compatibility_score": 70,
+                    "compatibility_feedback": "Using rule-based optimization. Configure LLM API keys for personalized AI enhancements.",
+                    "status": "Fallback",
+                    "is_fallback": True
                 }
             
             resume_data = json.loads(data_str.group(1))
@@ -994,11 +1060,11 @@ class LLMService:
             summary = optimized_resume.get("summary", "")
             if summary:
                 # Add professional tone and action verbs to existing summary
-                optimized_resume["summary"] = f"Accomplished professional with extensive experience in {resume_data.get('target_role', 'their field')}. {summary} Proven track record of delivering high-quality solutions and leading successful projects in fast-paced environments."
-                improvements.append("Enhanced professional summary with stronger action verbs and industry-standard impact statements.")
+                optimized_resume["summary"] = f"Accomplished professional with experience in {resume_data.get('target_role', 'their field')}. {summary}"
+                improvements.append("Enhanced professional summary with stronger action verbs (Heuristic).")
             else:
-                optimized_resume["summary"] = f"Results-driven professional with a proven track record of delivering high-quality solutions in {resume_data.get('target_role', 'their field')}. Expert in leveraging industry-standard tools and methodologies to optimize performance and achieve organizational goals."
-                improvements.append("Generated a new, impactful professional summary focused on core competencies.")
+                optimized_resume["summary"] = f"Results-driven professional with a proven track record of delivering high-quality solutions in {resume_data.get('target_role', 'their field')}."
+                improvements.append("Generated a new professional summary focused on core competencies (Heuristic).")
             
             # 2. Optimize Experience
             if "experience" in optimized_resume:
@@ -1016,85 +1082,32 @@ class LLMService:
                             "made": "Developed"
                         }
                         
-                        changed = False
                         for weak, strong in verb_map.items():
                             if weak in desc.lower():
                                 desc = re.sub(rf"\b{weak}\b", strong, desc, flags=re.IGNORECASE)
-                                changed = True
-                        
-                        # Add mock quantification if missing
-                        if not any(char.isdigit() for char in desc):
-                            desc += " resulted in a 15% increase in operational efficiency."
-                            improvements.append(f"Added measurable impact and quantifiable metrics to the role at {exp.get('company')}.")
-                        elif changed:
-                            improvements.append(f"Optimized action verbs for better impact in the role at {exp.get('company')}.")
                         
                         exp["description"] = desc
                 
-                if not any("measurable impact" in imp for imp in improvements):
-                    improvements.append("Refined experience bullet points to emphasize achievements over responsibilities.")
+                improvements.append("Refined experience bullet points to emphasize achievements (Heuristic).")
 
             # 3. Optimize Skills
             if "skills" in optimized_resume:
                 essential_skills = ["Project Management", "Team Collaboration", "Problem Solving"]
-                added_skills = []
                 for s in essential_skills:
                     if s.lower() not in [str(sk).lower() for sk in optimized_resume["skills"]]:
                         optimized_resume["skills"].append(s)
-                        added_skills.append(s)
                 
-                if added_skills:
-                    improvements.append(f"Expanded skills section with essential industry competencies: {', '.join(added_skills)}.")
-
-            # 4. Job-Specific Heuristics
-            compatibility_score = 0
-            compatibility_feedback = "No job description provided for comparison."
-            skill_gap = []
-            matching_skills = []
-            skill_recommendations = ["Continue developing core technical competencies.", "Gain certification in cloud technologies."]
-            cert_recommendations = ["AWS Certified Solutions Architect", "Professional Scrum Master (PSM I)"]
-
-            if job_desc:
-                # Simple keyword matching for mock compatibility
-                keywords = ["python", "react", "javascript", "typescript", "node", "aws", "sql", "docker", "kubernetes", "agile", "management"]
-                found_keywords = [k for k in keywords if k in job_desc.lower()]
-                resume_skills = [str(s).lower() for s in optimized_resume.get("skills", [])]
-                
-                matching_skills = [k.capitalize() for k in found_keywords if any(k in s for s in resume_skills)]
-                skill_gap = [k.capitalize() for k in found_keywords if not any(k in s for s in resume_skills)]
-                
-                if not matching_skills and not skill_gap:
-                    compatibility_score = 45
-                else:
-                    compatibility_score = min(95, 40 + (len(matching_skills) * 10))
-                
-                compatibility_feedback = f"Your resume shows a {compatibility_score}% match with the job requirements. "
-                if skill_gap:
-                    compatibility_feedback += f"To improve your chances, consider highlighting experience with {', '.join(skill_gap[:3])}."
-                else:
-                    compatibility_feedback += "Your background strongly aligns with the core requirements of this role."
-                
-                if skill_gap:
-                    skill_recommendations = [f"Master {s} to bridge the current gap." for s in skill_gap[:3]]
-                
-                cert_recommendations = [f"Industry certification in {s}" for s in (skill_gap[:2] or matching_skills[:2])]
-
-            # Calculate a more dynamic projected score
-            base_score = 82
-            improvement_bonus = len(improvements) * 2
-            projected_ats_score = min(98, base_score + improvement_bonus)
+                improvements.append("Expanded skills section with essential industry competencies (Heuristic).")
 
             return {
                 "optimized_resume": optimized_resume,
-                "optimization_summary": "The resume was optimized for better ATS readability, professional tone, and quantified impact. We've improved action verbs and added essential industry keywords.",
-                "improvements_made": list(dict.fromkeys(improvements))[:6], # Unique and limited
-                "projected_ats_score": projected_ats_score,
-                "compatibility_score": compatibility_score,
-                "compatibility_feedback": compatibility_feedback,
-                "skill_gap": skill_gap,
-                "matching_skills": matching_skills,
-                "skill_recommendations": skill_recommendations,
-                "certificate_recommendations": cert_recommendations
+                "optimization_summary": "The resume was optimized using rule-based heuristics for better readability and tone.",
+                "improvements_made": list(dict.fromkeys(improvements))[:5],
+                "projected_ats_score": 75,
+                "compatibility_score": 70,
+                "compatibility_feedback": "Rule-based optimization applied. Configure API keys for full AI power.",
+                "status": "Fallback",
+                "is_fallback": True
             }
         except Exception as e:
             logger.error(f"Heuristic optimization failed: {e}")
@@ -1102,23 +1115,48 @@ class LLMService:
 
     def _heuristic_ats_analyzer(self, prompt: str) -> Dict[str, Any]:
         """A heuristic analyzer for ATS when LLM is unavailable."""
+        logger.warning("Using heuristic ATS analyzer fallback - results will be generic.")
         return {
-            "overall_score": 78,
-            "keyword_optimization_score": 75,
-            "semantic_relevance_score": 80,
-            "industry_alignment_score": 82,
+            "overall_score": 65,
+            "keyword_optimization_score": 60,
+            "semantic_relevance_score": 65,
+            "industry_alignment_score": 70,
+            "formatting_score": 80,
+            "structure_score": 75,
+            "readability_score": 70,
+            "contact_info_score": 90,
+            "presence_score": 60,
+            "education_score": 80,
+            "experience_score": 70,
+            "skills_score": 75,
             "issues": [
-                "Lack of quantifiable metrics in several experience bullet points.",
-                "Professional summary could be more impactful by focusing on achievements.",
-                "Missing some high-value industry keywords for the target role."
+                "Using heuristic analysis. Deep AI insights unavailable without API keys.",
+                "Content could benefit from more quantifiable achievements.",
+                "Standard section headers detected, but semantic depth is limited."
             ],
             "recommendations": [
-                "Add specific metrics (e.g., %, $) to at least 3 bullet points in your recent roles.",
-                "Rewrite the summary using the 'Accomplished [X] by doing [Y]' formula.",
-                "Include more technical skills like Docker or Kubernetes if relevant to your target role."
+                "Configure an LLM provider (Gemini/OpenAI) for personalized analysis.",
+                "Add more metrics and percentages to your experience bullet points.",
+                "Ensure all technical skills are explicitly listed in the skills section."
             ],
-            "matched_keywords": ["Python", "SQL", "Agile", "Management"],
-            "missing_keywords": ["Docker", "Kubernetes", "CI/CD"]
+            "skill_analysis": {
+                "hard_skills": ["Python", "JavaScript", "SQL", "Git"],
+                "soft_skills": ["Communication", "Teamwork", "Problem Solving"],
+                "tools": ["Git", "VS Code", "Linux"]
+            },
+            "keyword_gap": {
+                "matched": [],
+                "missing": ["Configure API Keys for keyword analysis"],
+                "optional": []
+            },
+            "industry_tips": [
+                "Tailor your resume keywords to match job descriptions.",
+                "Include quantifiable achievements that demonstrate business impact.",
+                "Add relevant certifications and continuous learning initiatives."
+            ],
+            "llm_powered": False,
+            "is_fallback": True,
+            "status": "Fallback"
         }
 
     def generate_embeddings(

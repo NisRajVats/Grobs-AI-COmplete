@@ -203,7 +203,7 @@ def get_celery_config() -> Dict[str, Any]:
         logger.warning("Kombu not found, Celery configuration will be incomplete")
         return {}
     
-    return {
+    config = {
         "broker_url": settings.CELERY_BROKER_URL,
         "result_backend": settings.CELERY_RESULT_BACKEND,
         "task_serializer": "json",
@@ -242,6 +242,22 @@ def get_celery_config() -> Dict[str, Any]:
             "ats_analysis_worker.batch_process": {"queue": "low"},
         },
     }
+
+    # Filesystem broker support (common for dev without Redis)
+    if settings.CELERY_BROKER_URL.startswith("filesystem://"):
+        import os
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "celery"))
+        os.makedirs(os.path.join(base_dir, "in"), exist_ok=True)
+        os.makedirs(os.path.join(base_dir, "out"), exist_ok=True)
+        
+        config["broker_transport_options"] = {
+            "data_folder_in": os.path.join(base_dir, "in"),
+            "data_folder_out": os.path.join(base_dir, "out"),
+            "processed_folder": os.path.join(base_dir, "processed")
+        }
+        os.makedirs(config["broker_transport_options"]["processed_folder"], exist_ok=True)
+
+    return config
 
 
 def create_celery_app():
@@ -311,13 +327,13 @@ def enqueue_task(
 
 
 def _execute_sync(task_name: str, *args, **kwargs) -> Optional[str]:
-    """Fallback to synchronous execution."""
+    """Fallback to synchronous execution, but avoids loop blocking."""
     try:
         # Dynamically import the worker module and call the function
         module_name, func_name = task_name.rsplit('.', 1)
         import importlib
-        # Adjust module name to match actual path if needed
-        # In our case "email_worker.process" -> "app.workers.email_worker.process"
+        import asyncio
+        
         if not module_name.startswith('app.workers.'):
             full_module_name = f"app.workers.{module_name}"
         else:
@@ -325,8 +341,18 @@ def _execute_sync(task_name: str, *args, **kwargs) -> Optional[str]:
             
         module = importlib.import_module(full_module_name)
         func = getattr(module, func_name)
-        func(*args, **kwargs)
-        return "sync_execution"
+        
+        try:
+            loop = asyncio.get_running_loop()
+            # We are in a running loop, run in threadpool
+            loop.run_in_executor(None, func, *args, **kwargs)
+            logger.info(f"Task {task_name} started in background thread (sync fallback)")
+            return "sync_background"
+        except RuntimeError:
+            # No running loop, just call it
+            func(*args, **kwargs)
+            return "sync_execution"
+            
     except Exception as sync_e:
         logger.error(f"Failed to execute task synchronously: {sync_e}")
         return None

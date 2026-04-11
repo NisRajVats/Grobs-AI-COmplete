@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 import numpy as np
 
 from app.models import Resume, ResumeContent, ResumeEmbedding, Job, JobSkill, JobEmbedding
+from app.services.scoring_engine import scoring_engine
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +50,27 @@ class JobMatcher:
             ).first()
             
             if not resume:
+                logger.warning(f"Resume not found: id={resume_id}, user_id={user_id}")
                 return []
                 
             resume_skills = set(s.name.lower() for s in resume.skills)
             
             if not resume.embedding or not resume.embedding.embedding_vector:
                 # Fallback to keyword-based matching
+                logger.info(f"No embedding found for resume {resume_id}, using keyword matching")
                 return self._keyword_match_resume_to_jobs(resume_id, user_id, limit, resume_skills)
             
             # 2. Get all job embeddings with their associated jobs and skills in ONE query
+            # EXCLUDE mock/sample data
             job_data = self.db.query(JobEmbedding).options(
                 joinedload(JobEmbedding.job).selectinload(Job.skills)
-            ).filter(
-                JobEmbedding.embedding_vector.isnot(None)
+            ).join(Job).filter(
+                JobEmbedding.embedding_vector.isnot(None),
+                Job.source != "Sample"
             ).all()
             
             if not job_data:
+                logger.info(f"No job embeddings found, using keyword matching")
                 return self._keyword_match_resume_to_jobs(resume_id, user_id, limit, resume_skills)
             
             # 3. Vectorized calculations
@@ -87,28 +93,38 @@ class JobMatcher:
                     
                     if not job_skill_names and job.skills_required:
                         try:
-                            skills_list = json.loads(job.skills_required)
+                            if isinstance(job.skills_required, str):
+                                skills_list = json.loads(job.skills_required)
+                            else:
+                                skills_list = job.skills_required
                             job_skill_names = set(s.lower() for s in skills_list)
-                        except:
+                        except Exception as e:
+                            logger.warning(f"Error parsing skills_required for job {job.id}: {e}")
                             pass
                             
                     missing_keywords = list(job_skill_names - resume_skills)[:8]
                     
+                    # Calculate advanced scoring
+                    skill_match_ratio = len(resume_skills.intersection(job_skill_names)) / len(job_skill_names) if job_skill_names else 0.5
+                    
+                    scores = {
+                        "skill_match": skill_match_ratio,
+                        "experience_match": similarity, # Proxy
+                        "keyword_match": similarity * 0.9, # Proxy
+                        "resume_quality": 0.8, # Default for matched resumes
+                        "job_difficulty": scoring_engine.estimate_job_difficulty(job.job_title, job.company_name)
+                    }
+                    
+                    probability_data = scoring_engine.calculate_selection_probability(scores)
+                    
                     matches.append({
-                        "job": {
-                            "id": job.id,
-                            "job_title": job.job_title,
-                            "company_name": job.company_name,
-                            "location": job.location,
-                            "job_type": job.job_type,
-                            "job_description": job.job_description,
-                            "job_link": job.job_link,
-                            "posted_date": job.posted_date,
-                            "source": job.source
-                        },
-                        "match_score": int(similarity * 100),
+                        "job": job,
+                        "match_score": int(probability_data["match_score"]),
+                        "selection_probability": probability_data["selection_probability"],
+                        "selection_chance": probability_data["chance"],
                         "similarity": float(similarity),
-                        "missing_keywords": missing_keywords
+                        "missing_keywords": missing_keywords,
+                        "score_breakdown": probability_data["score_breakdown"]
                     })
             
             # Sort by score and return top N
@@ -116,8 +132,9 @@ class JobMatcher:
             return matches[:limit]
             
         except Exception as e:
-            logger.error(f"Error matching resume to jobs: {e}")
-            return self._keyword_match_resume_to_jobs(resume_id, user_id, limit)
+            logger.error(f"Error matching resume to jobs: {e}", exc_info=True)
+            # Return empty list instead of falling back to keyword matching to avoid potential recursion
+            return []
     
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Calculate cosine similarity between two vectors."""
@@ -154,9 +171,10 @@ class JobMatcher:
             resume_skills = set(s.name.lower() for s in resume.skills)
         
         # Get all jobs with their skills in ONE query
+        # EXCLUDE mock/sample data
         jobs = self.db.query(Job).options(
             selectinload(Job.skills)
-        ).all()
+        ).filter(Job.source != "Sample").all()
         
         matches = []
         for job in jobs:
@@ -164,8 +182,13 @@ class JobMatcher:
             
             if not job_skill_names and job.skills_required:
                 try:
-                    skills_list = json.loads(job.skills_required)
-                    job_skill_names = set(s.lower() for s in skills_list)
+                    if isinstance(job.skills_required, str):
+                        skills_list = json.loads(job.skills_required)
+                    else:
+                        skills_list = job.skills_required
+                    
+                    if skills_list:
+                        job_skill_names = set(s.lower() for s in skills_list)
                 except:
                     pass
             
@@ -185,17 +208,7 @@ class JobMatcher:
                 missing = list(job_skill_names - resume_skills)[:8]
                 
                 matches.append({
-                    "job": {
-                        "id": job.id,
-                        "job_title": job.job_title,
-                        "company_name": job.company_name,
-                        "location": job.location,
-                        "job_type": job.job_type,
-                        "job_description": job.job_description,
-                        "job_link": job.job_link,
-                        "posted_date": job.posted_date,
-                        "source": job.source
-                    },
+                    "job": job,
                     "match_score": int(score * 100),
                     "similarity": score,
                     "missing_keywords": missing

@@ -129,7 +129,7 @@ const AppRoutes = () => {
           <Route path="resumes/:resumeId" element={<ResumeDetail />} />
           <Route path="resumes/:resumeId/ats" element={<ATSAnalysis />} />
           <Route path="resumes/:resumeId/job-optimization" element={<JobOptimization />} />
-          <Route path="resumes/:resumeId/optimize" element={<Navigate to="../" relative="path" replace />} />
+          <Route path="resumes/:resumeId/optimize" element={<OptimizeResume />} />
           <Route path="resumes/:resumeId/preview" element={<ResumePreview />} />
           <Route path="resumes/:resumeId/edit" element={<ResumeEdit />} />
           <Route path="resumes/:resumeId/jobs" element={<JobSearch />} />

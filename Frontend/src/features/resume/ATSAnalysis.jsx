@@ -9,6 +9,7 @@ const ATSAnalysis = () => {
   const navigate = useNavigate();
   const resultsRef = useRef(null);
   const [analysis, setAnalysis] = useState(null);
+  const [originalResume, setOriginalResume] = useState(null);
   const [loading, setLoading] = useState(true);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState(null);
@@ -30,9 +31,19 @@ const ATSAnalysis = () => {
     }
   }, [resumeId]);
 
+  const fetchOriginalResume = useCallback(async () => {
+    try {
+      const response = await resumeAPI.getResume(resumeId);
+      setOriginalResume(response.data);
+    } catch (error) {
+      console.error("Error fetching original resume:", error);
+    }
+  }, [resumeId]);
+
   useEffect(() => {
     fetchAnalysis();
-  }, [fetchAnalysis]);
+    fetchOriginalResume();
+  }, [fetchAnalysis, fetchOriginalResume]);
 
   useEffect(() => {
     if (showComparison && resultsRef.current) {
@@ -64,7 +75,8 @@ const ATSAnalysis = () => {
       if (err.response?.status === 404) {
         errorMessage = "Resume not found. Please refresh the page and try again.";
       } else if (err.response?.status === 400) {
-        errorMessage = err.response.data?.detail || "Resume has insufficient data for optimization. Please add more content to your resume first.";
+        const detail = err.response.data?.detail || "Unknown error";
+        errorMessage = `Optimization failed: ${detail}. Please ensure your resume has a summary, work experience, or uploaded content before optimizing.`;
       } else if (err.response?.status === 500) {
         errorMessage = "The optimization service is temporarily unavailable. Please try again in a few moments.";
       } else if (err.response?.data?.detail) {
@@ -145,9 +157,19 @@ const ATSAnalysis = () => {
         <div>
           <div className="flex items-center gap-4">
             <h1 className="text-3xl font-bold text-white">ATS Analysis</h1>
-            {analysis?.llm_powered && (
+            {analysis?.llm_powered && !analysis?.is_fallback && (
               <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest border border-blue-500/30 rounded-lg flex items-center gap-1">
                 <Sparkles size={10} /> AI Powered
+              </span>
+            )}
+            {analysis?.is_fallback && (
+              <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-black uppercase tracking-widest border border-amber-500/30 rounded-lg flex items-center gap-1" title="Using heuristic analysis - configure LLM provider for better results">
+                <Zap size={10} /> Heuristic Mode
+              </span>
+            )}
+            {!analysis?.llm_powered && !analysis?.is_fallback && (
+              <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-black uppercase tracking-widest border border-amber-500/30 rounded-lg flex items-center gap-1">
+                <Zap size={10} /> Basic Analysis
               </span>
             )}
             <button 
@@ -255,62 +277,103 @@ const ATSAnalysis = () => {
       </div>
 
       {/* New: Skill Extraction Section */}
-      {analysis?.skill_analysis && (
+      {analysis?.skill_analysis && (analysis.skill_analysis.hard_skills?.length > 0 || analysis.skill_analysis.soft_skills?.length > 0 || analysis.skill_analysis.tools?.length > 0) && (
         <div className="card-glass p-8 space-y-6">
-          <h3 className="text-xl font-bold text-white flex items-center gap-2">
-            <Target className="text-blue-400" /> Advanced Skill Extraction
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              <Target className="text-blue-400" /> Advanced Skill Extraction
+            </h3>
+            {!analysis.llm_powered && (
+              <span className="px-2 py-1 bg-amber-500/10 text-amber-400 text-[10px] font-bold uppercase tracking-wider border border-amber-500/20 rounded-lg">
+                Heuristic Analysis
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="space-y-3">
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Hard Skills</h4>
-              <div className="flex flex-wrap gap-2">
-                {analysis.skill_analysis.hard_skills?.map((skill, i) => (
-                  <span key={i} className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-400 text-xs font-bold">{skill}</span>
-                ))}
-              </div>
+              {analysis.skill_analysis.hard_skills?.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {analysis.skill_analysis.hard_skills.map((skill, i) => (
+                    <span key={i} className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-blue-400 text-xs font-bold">{skill}</span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-xs italic">No hard skills detected. Add technical skills to your resume.</p>
+              )}
             </div>
             <div className="space-y-3">
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Soft Skills</h4>
-              <div className="flex flex-wrap gap-2">
-                {analysis.skill_analysis.soft_skills?.map((skill, i) => (
-                  <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-bold">{skill}</span>
-                ))}
-              </div>
+              {analysis.skill_analysis.soft_skills?.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {analysis.skill_analysis.soft_skills.map((skill, i) => (
+                    <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-bold">{skill}</span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-xs italic">No soft skills detected. Mention teamwork, leadership, etc.</p>
+              )}
             </div>
             <div className="space-y-3">
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest px-1">Tools & Platforms</h4>
-              <div className="flex flex-wrap gap-2">
-                {analysis.skill_analysis.tools?.map((skill, i) => (
-                  <span key={i} className="px-3 py-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-400 text-xs font-bold">{skill}</span>
-                ))}
-              </div>
+              {analysis.skill_analysis.tools?.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {analysis.skill_analysis.tools.map((skill, i) => (
+                    <span key={i} className="px-3 py-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-400 text-xs font-bold">{skill}</span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-xs italic">No tools detected. Add software, frameworks, and platforms.</p>
+              )}
             </div>
           </div>
         </div>
       )}
 
       {/* New: Keyword Gap Analysis */}
-      {analysis?.keyword_gap && (
+      {analysis?.keyword_gap && (analysis.keyword_gap.matched?.length > 0 || analysis.keyword_gap.missing?.length > 0) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="card-glass p-6 space-y-4">
-            <h3 className="font-bold text-white flex items-center gap-2">
-              <CheckCircle2 className="text-green-400" /> Matched Keywords
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {analysis.keyword_gap.matched?.map((keyword, i) => (
-                <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-medium">{keyword}</span>
-              ))}
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                <CheckCircle2 className="text-green-400" /> Matched Keywords
+              </h3>
+              {!analysis.llm_powered && (
+                <span className="px-2 py-1 bg-amber-500/10 text-amber-400 text-[10px] font-bold uppercase tracking-wider border border-amber-500/20 rounded-lg">
+                  Heuristic
+                </span>
+              )}
             </div>
+            {analysis.keyword_gap.matched?.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {analysis.keyword_gap.matched.map((keyword, i) => (
+                  <span key={i} className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs font-medium">{keyword}</span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-slate-500 text-xs italic">No keywords matched yet. Add more industry-specific terms.</p>
+            )}
           </div>
           <div className="card-glass p-6 space-y-4">
-            <h3 className="font-bold text-white flex items-center gap-2">
-              <AlertTriangle className="text-rose-400" /> Missing Keywords
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {analysis.keyword_gap.missing?.map((keyword, i) => (
-                <span key={i} className="px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-medium">{keyword}</span>
-              ))}
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                <AlertTriangle className="text-rose-400" /> Missing Keywords
+              </h3>
+              {!analysis.llm_powered && (
+                <span className="px-2 py-1 bg-amber-500/10 text-amber-400 text-[10px] font-bold uppercase tracking-wider border border-amber-500/20 rounded-lg">
+                  Heuristic
+                </span>
+              )}
             </div>
+            {analysis.keyword_gap.missing?.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {analysis.keyword_gap.missing.map((keyword, i) => (
+                  <span key={i} className="px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-medium">{keyword}</span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-slate-500 text-xs italic">Great! You're covering all key industry terms.</p>
+            )}
           </div>
         </div>
       )}
@@ -431,10 +494,43 @@ const ATSAnalysis = () => {
                         try {
                           setOptimizing(true);
                           // Apply changes to the original resume
-                          await resumeAPI.updateResume(resumeId, optimizationResult.optimized_resume);
+                          // The optimized_resume contains the full resume data structure
+                          // We need to send it in the format expected by the backend
+                          const optimizedData = optimizationResult.optimized_resume;
+                          
+                          // Use originalResume data as fallback (not analysis which is ATS results!)
+                          const baseResume = originalResume || {};
+                          const baseParsedData = baseResume.parsed_data || {};
+                          
+                          // Format the data for the update endpoint
+                          const updatePayload = {
+                            full_name: optimizedData.full_name || baseParsedData.full_name || baseResume.full_name || "",
+                            email: optimizedData.email || baseParsedData.email || baseResume.email || "",
+                            phone: optimizedData.phone || baseParsedData.phone || baseResume.phone || "",
+                            linkedin_url: optimizedData.linkedin_url || baseParsedData.linkedin_url || baseResume.linkedin_url || "",
+                            title: optimizedData.title || baseParsedData.title || baseResume.title || "",
+                            summary: optimizedData.summary || "",
+                            target_role: optimizedData.target_role || baseParsedData.target_role || baseResume.target_role || "",
+                            education: optimizedData.education || baseParsedData.education || [],
+                            experience: optimizedData.experience || baseParsedData.experience || [],
+                            projects: optimizedData.projects || baseParsedData.projects || [],
+                            skills: (optimizedData.skills || []).map(skill => 
+                              typeof skill === 'string' ? { name: skill } : skill
+                            ),
+                            // CRITICAL: Sync the projected ATS score to the resume model
+                            ats_score: optimizationResult.ats_score,
+                            analysis_score: optimizationResult.ats_score
+                          };
+                          
+                          console.log("Applying optimization with data:", updatePayload);
+                          await resumeAPI.updateResume(resumeId, updatePayload);
                           setShowComparison(false);
-                          // Refresh analysis to show the new ATS score
-                          fetchAnalysis();
+                          setOptimizationResult(null);
+                          // Small delay to ensure backend cache is cleared
+                          await new Promise(resolve => setTimeout(resolve, 500));
+                          // Refresh both resume data and analysis to show the new ATS score
+                          await fetchOriginalResume();
+                          await fetchAnalysis(true);
                         } catch (err) {
                           console.error("Apply error:", err);
                           setError("Failed to apply enhancements.");

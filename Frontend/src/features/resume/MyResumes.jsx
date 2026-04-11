@@ -94,7 +94,7 @@ const MyResumes = () => {
       setSelectedResumes(new Set(resumes.map(r => r.id)));
       setSelectAll(true);
     }
-  }, [selectAll, selectedResumes.size, resumes.length, resumes]);
+  }, [selectAll, selectedResumes, resumes]);
 
   const toggleResumeSelect = useCallback((id) => {
     setSelectedResumes(prev => {
@@ -306,8 +306,8 @@ const MyResumes = () => {
                       <div className="w-12 h-12 bg-blue-600/20 rounded-xl flex items-center justify-center">
                         <FileText size={24} className="text-blue-400" />
                       </div>
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border ${resume.ats_score ? 'text-green-400 bg-green-500/10 border-green-500/20' : 'text-slate-400 bg-slate-500/10 border-slate-500/20'}`}>
-                        {resume.ats_score ? `ATS: ${resume.ats_score}%` : 'NEW'}
+                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border ${ (resume.ats_score !== undefined && resume.ats_score !== null) ? 'text-green-400 bg-green-500/10 border-green-500/20' : 'text-slate-400 bg-slate-500/10 border-slate-500/20'}`}>
+                        {(resume.ats_score !== undefined && resume.ats_score !== null) ? `ATS: ${resume.ats_score}%` : 'NEW'}
                       </span>
                     </div>
                     
@@ -318,7 +318,7 @@ const MyResumes = () => {
                       <Clock size={14} /> {new Date(resume.created_at).toLocaleDateString()}
                     </p>
 
-                    {resume.ats_score && (
+                    {(resume.ats_score !== undefined && resume.ats_score !== null) && (
                       <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-xl">
                         <Target size={18} className="text-green-400" />
                         <div className="flex-1">

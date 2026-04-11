@@ -27,7 +27,8 @@ from app.schemas.resume import (
     OptimizeResumeResponse,
     ResumeVersionResponse,
     BulkDeleteRequest,
-    BulkDeleteResponse
+    BulkDeleteResponse,
+    ResumeUploadResponse
 )
 from app.utils.cache import cache_instance
 from app.schemas.job import (
@@ -37,7 +38,8 @@ from app.schemas.job import (
 
 from app.integrations.cloud_storage import cloud_storage_service
 
-from app.workers.resume_worker import process_resume_parsing, process_ats_analysis
+from app.workers.celery_app import celery
+from app.workers.resume_worker import process_resume_parsing, process_ats_analysis, process_resume_full_pipeline
 
 # Backward compatibility alias
 JobRecommender = JobMatcher
@@ -78,15 +80,16 @@ async def create_resume(
     return resume
 
 
-@router.post("/upload", response_model=ResumeDetailResponse)
+@router.post("/upload", response_model=ResumeUploadResponse)
 async def upload_resume(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     target_role: Optional[str] = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload a resume PDF file and parse immediately."""
+    """Upload a resume PDF file and trigger full async pipeline."""
     logger = logging.getLogger(__name__)
     try:
         # Read file content
@@ -108,46 +111,36 @@ async def upload_resume(
             filename=file.filename
         )
         
-        # IMMEDIATELY parse (sync) - populate parsed_data + nested tables
-        await manager.parse_resume_file(resume.id, current_user.id)
+        # Trigger FULL pipeline task
+        if celery:
+            # Fire-and-forget background task via Celery
+            process_resume_full_pipeline.delay(resume.id, current_user.id)
+        else:
+            # Fallback to FastAPI BackgroundTasks if Celery is not available
+            # This avoids the "asyncio.run() cannot be called from a running event loop" error
+            # as BackgroundTasks will run the sync function in a threadpool where asyncio.run() works.
+            logger.info(f"Celery unavailable. Using FastAPI BackgroundTasks for resume {resume.id}")
+            background_tasks.add_task(process_resume_full_pipeline, resume.id, current_user.id)
         
-        # Explicitly reload the resume from DB to get the latest state after parsing
-        from sqlalchemy.orm import selectinload
-        resume = db.query(Resume).options(
-            selectinload(Resume.education),
-            selectinload(Resume.experience),
-            selectinload(Resume.projects),
-            selectinload(Resume.skills),
-            selectinload(Resume.versions),
-            selectinload(Resume.analyses)
-        ).filter(Resume.id == resume.id, Resume.user_id == current_user.id).first()
-        
-        if not resume:
-            raise HTTPException(status_code=404, detail="Resume not found after parsing")
-        
-        # Create notification
-        try:
-            notif = Notification(
-                user_id=current_user.id,
-                title="Resume Parsed",
-                message=f"'{title or file.filename}' successfully parsed and loaded!",
-                type="success",
-                action_url=f"/app/resumes/{resume.id}"
-            )
-            db.add(notif)
-            db.commit()
-        except Exception:
-            pass
-        
-        # Return FULL response with parsed_data for frontend
-        return ResumeDetailResponse.from_orm(resume)
+        # Return response with pipeline status
+        return {
+            "id": resume.id,
+            "status": "pipeline_queued",
+            "message": f"Resume '{title or file.filename}' uploaded. Full processing pipeline queued in background.",
+            "title": title or file.filename,
+            "pipeline": {
+                "resume_id": resume.id,
+                "stages_completed": [],
+                "success": True,
+                "status": "queued",
+                "message": "Processing started"
+            }
+        }
     
     except ValueError as e:
-        logger = logging.getLogger(__name__)
         logger.error(f"ValueError in upload_resume: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger = logging.getLogger(__name__)
         logger.exception(f"Unexpected error in upload_resume: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error uploading resume: {str(e)}")
 
@@ -186,6 +179,9 @@ async def update_resume(
     
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
+    
+    # Clear cache for get_resume and get_resumes endpoints
+    cache_instance.clear()
     
     return ResumeDetailResponse.from_orm(resume)
 
@@ -306,12 +302,30 @@ async def optimize_resume(
             detail=f"Resume with id {resume_id} not found or you don't have access to it"
         )
     
-    # Validate that the resume has necessary data for optimization
-    if not resume.parsed_data and not resume.summary and not resume.experience:
-        raise HTTPException(
-            status_code=400,
-            detail="Resume has insufficient data for optimization. Please add content to your resume first."
-        )
+    # Add debug logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Optimizing resume {resume_id}: parsed_data_len={len(resume.parsed_data) if resume.parsed_data else 0}, summary_len={len(resume.summary) if resume.summary else 0}, experience_count={len(resume.experience) if resume.experience else 0}")
+    
+    # Validate that the resume has some useful data for optimization
+    has_parsed = bool(resume.parsed_data and len(resume.parsed_data) > 20) # Min threshold for JSON
+    has_summary = bool(resume.summary and len(resume.summary) > 10)
+    has_experience = bool(resume.experience and len(resume.experience) > 0)
+    has_skills = bool(resume.skills and len(resume.skills) > 0)
+    has_projects = bool(resume.projects and len(resume.projects) > 0)
+    
+    if not (has_parsed or has_summary or has_experience or has_skills or has_projects):
+        logger.warning(f"Resume {resume_id} has insufficient data for optimization")
+        # Try a tiny AI fallback if possible, or fail with clear message
+        if request.job_description:
+             logger.info(f"Attempting to proceed with job description for empty resume {resume_id}")
+             # We let it pass to the optimizer which might be able to generate something 
+             # from just the JD and target role if any
+        else:
+            return OptimizeResumeResponse(
+                success=False,
+                resume_id=resume_id,
+                error="Resume has insufficient data for optimization. Please add some experience, skills, or a summary first."
+            )
         
     optimizer = ResumeOptimizer(db)
     try:
@@ -321,12 +335,18 @@ async def optimize_resume(
             optimization_type=request.optimization_type,
             job_description=request.job_description,
             job_id=request.job_id,
-            save_as_new=request.save_as_new
+            save_as_new=request.save_as_new,
+            provider=request.provider
         )
         
-        if not result["success"]:
+        # Ensure result is a structured response even on failure
+        if not result.get("success"):
             error_msg = result.get("error", "Optimization failed")
-            raise HTTPException(status_code=400, detail=error_msg)
+            return OptimizeResumeResponse(
+                success=False,
+                resume_id=resume_id,
+                error=error_msg
+            )
             
         return result
     except HTTPException:
@@ -380,6 +400,27 @@ async def process_resume_pipeline(
     return result
 
 
+@router.get("/{resume_id}/pipeline-status")
+async def get_pipeline_status(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get the current processing status of a resume pipeline."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"Pipeline status request for resume {resume_id}, user {current_user.id}")
+    
+    pipeline = ResumePipelineService(db)
+    status = pipeline.get_pipeline_status(resume_id, current_user.id)
+    
+    if status.get("error"):
+        logger.warning(f"Pipeline status error for resume {resume_id}: {status['error']}")
+        raise HTTPException(status_code=404, detail=status["error"])
+    
+    logger.info(f"Pipeline status for resume {resume_id}: progress={status.get('progress', 0)}%, status={status['current_status']}")
+    return status
+
+
 @router.get("/{resume_id}/versions", response_model=List[ResumeVersionResponse])
 @cache_response(ttl=300)
 async def get_resume_versions(
@@ -390,7 +431,7 @@ async def get_resume_versions(
     """Get all versions of a resume."""
     manager = ResumeManager(db)
     versions = manager.get_resume_versions(resume_id, current_user.id)
-    return versions
+    return versions 
 
 
 @router.post("/bulk-delete", response_model=BulkDeleteResponse)

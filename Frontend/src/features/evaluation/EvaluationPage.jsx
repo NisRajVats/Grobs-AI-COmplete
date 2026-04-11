@@ -37,13 +37,14 @@ const EvaluationPage = () => {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('summary');
+  const [activeTab, setActiveTab] = useState('performance');
+  const [method, setMethod] = useState('heuristic');
 
   const runEvaluation = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await evaluationAPI.runEvaluation();
+      const response = await evaluationAPI.runEvaluation(method);
       setResults(response.data);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to run evaluation');
@@ -76,18 +77,35 @@ const EvaluationPage = () => {
           <h1 className="text-3xl font-bold text-white tracking-tight">Project Integrity Evaluator</h1>
           <p className="text-slate-400 mt-1">Cross-check feature completeness and model accuracy against standard datasets.</p>
         </div>
-        <button
-          onClick={runEvaluation}
-          disabled={loading}
-          className={`flex items-center gap-2 px-8 py-4 rounded-2xl font-bold transition-all shadow-2xl ${
-            loading 
-              ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-              : 'bg-linear-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:scale-[1.02] active:scale-[0.98]'
-          }`}
-        >
-          {loading ? <RefreshCw className="animate-spin" size={20} /> : <Play size={20} fill="currentColor" />}
-          {loading ? 'Evaluating Codebase...' : 'Execute Full Audit'}
-        </button>
+        <div className="flex flex-col md:flex-row items-center gap-4">
+          <div className="flex bg-slate-950/40 p-1.5 rounded-2xl border border-white/10 backdrop-blur-md">
+            {['heuristic', 'google', 'openai', 'anthropic'].map((m) => (
+              <button
+                key={m}
+                onClick={() => setMethod(m)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all capitalize ${
+                  method === m 
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' 
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={runEvaluation}
+            disabled={loading}
+            className={`flex items-center gap-2 px-8 py-4 rounded-2xl font-bold transition-all shadow-2xl ${
+              loading 
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                : 'bg-linear-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:scale-[1.02] active:scale-[0.98]'
+            }`}
+          >
+            {loading ? <RefreshCw className="animate-spin" size={20} /> : <Play size={20} fill="currentColor" />}
+            {loading ? 'Evaluating...' : 'Run Analysis'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -126,7 +144,7 @@ const EvaluationPage = () => {
           {/* Smart Tabs Layout */}
           <div className="bg-slate-900/40 border border-white/5 rounded-3xl overflow-hidden backdrop-blur-md">
             <div className="flex border-b border-white/5 bg-slate-950/20 p-2">
-              {['Summary', 'Technical Matrix', 'Efficiency'].map(tab => (
+              {['Performance', 'Summary', 'Technical Matrix', 'Efficiency'].map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab.toLowerCase().replace(' ', '-'))}
@@ -143,6 +161,59 @@ const EvaluationPage = () => {
 
             <div className="p-8">
               <AnimatePresence mode="wait">
+                {activeTab === 'performance' && (
+                  <motion.div 
+                    key="performance"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    className="space-y-8"
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {results.core_analysis.map((metric, i) => (
+                        <div key={i} className="bg-slate-900/60 border border-white/10 p-6 rounded-3xl backdrop-blur-sm">
+                          <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-blue-500/20 rounded-lg text-blue-400">
+                                {metric.name.includes('Parser') ? <FileText size={20} /> : <Zap size={20} />}
+                              </div>
+                              <h5 className="text-lg font-bold text-white">{metric.name}</h5>
+                            </div>
+                            <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              metric.accuracy > 85 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
+                            }`}>
+                              {metric.accuracy > 85 ? 'High Precision' : 'Standard'}
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                              <p className="text-slate-500 text-xs font-bold uppercase mb-1">Accuracy</p>
+                              <div className="flex items-end gap-2">
+                                <span className="text-3xl font-black text-white">{metric.accuracy}%</span>
+                                <div className="mb-1 w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                  <motion.div 
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${metric.accuracy}%` }}
+                                    className="h-full bg-emerald-500"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                            <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                              <p className="text-slate-500 text-xs font-bold uppercase mb-1">Response Time</p>
+                              <div className="flex items-end gap-2">
+                                <span className="text-3xl font-black text-blue-400">{metric.latency}ms</span>
+                                <Clock size={16} className="text-slate-600 mb-2" />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+
                 {activeTab === 'summary' && (
                   <motion.div 
                     key="summary"

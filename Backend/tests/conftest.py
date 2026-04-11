@@ -2,6 +2,22 @@
 Pytest configuration and shared fixtures for GrobsAI tests.
 """
 import pytest
+import httpx
+
+# Workaround for Starlette 0.27.0 + httpx 0.28.1 incompatibility
+# httpx 0.28.1 removed the 'app' argument from Client.__init__, but Starlette 0.27.0 still passes it.
+_original_httpx_client_init = httpx.Client.__init__
+
+def _patched_httpx_client_init(self, *args, **kwargs):
+    if "app" in kwargs:
+        app = kwargs.pop("app")
+        if "transport" not in kwargs:
+            from httpx import ASGITransport
+            kwargs["transport"] = ASGITransport(app=app)
+    _original_httpx_client_init(self, *args, **kwargs)
+
+httpx.Client.__init__ = _patched_httpx_client_init
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -12,6 +28,7 @@ from app.core.config import settings
 
 # Force testing environment
 settings.ENVIRONMENT = "testing"
+settings.SKIP_LLM_PARSING = False
 
 # Use in-memory SQLite for tests
 TEST_DATABASE_URL = "sqlite:///./test.db"
@@ -37,14 +54,36 @@ def setup_database():
 
 
 @pytest.fixture
-def db():
-    """Provide a test database session."""
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.rollback()
-        db.close()
+def db_session():
+    """Provide a test database session with automatic rollback."""
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(bind=connection)
+
+    yield session
+
+    session.close()
+    transaction.rollback()
+    connection.close()
+
+@pytest.fixture
+def mock_user(db_session):
+    """Provide a test user."""
+    from app.models import User
+    from app.core.security import get_password_hash
+    
+    user = db_session.query(User).filter_by(email="test@example.com").first()
+    if not user:
+        user = User(
+            email="test@example.com",
+            hashed_password=get_password_hash("password123"),
+            full_name="Test User",
+            is_active=True
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+    return user
 
 
 @pytest.fixture

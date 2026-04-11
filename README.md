@@ -1,129 +1,97 @@
-# GrobsAI - AI-Powered Career Platform
+# GrobsAI - AI-Powered Career Ecosystem
 
-GrobsAI is a comprehensive full-stack AI career platform that helps users with resume management, job matching, ATS analysis, mock interviews, and application tracking.
-
-## 🚀 Project Overview
-
-- **Frontend**: React 19, Vite, Tailwind CSS, Recharts, Framer Motion
-- **Backend**: FastAPI, SQLAlchemy, SQLite/PostgreSQL
-- **AI**: Google Gemini / OpenAI / Anthropic (configurable)
-- **Auth**: JWT with refresh tokens
+**GrobsAI** is a comprehensive, full-stack AI career platform engineered to revolutionize the job application lifecycle. By leveraging state-of-the-art Large Language Models (LLMs) and vector embeddings, the platform provides users with high-fidelity resume optimization, ATS-aligned scoring, personalized job matching, and real-time AI-driven interview preparation.
 
 ---
 
-## 📁 Project Structure
+## 🏗️ System Architecture & Methodology
 
-- **[Backend/](./Backend/)**: Python-based FastAPI service.
-  - AI-driven resume parsing and ATS scoring.
-  - Mock interview generation and feedback.
-  - Job recommendation engine.
-  - PostgreSQL database with SQLAlchemy ORM.
-  - Celery for background tasks.
-- **[Frontend/](./Frontend/)**: Vite-powered React 19 application.
-  - Modern UI with Tailwind CSS.
-  - Resume builder and management.
-  - Interactive job center and interview preparation.
-  - Real-time AI chat integration.
+GrobsAI follows a modular, **service-oriented three-tier architecture** designed for high scalability, security, and maintainability.
+
+### 1. Frontend: High-Performance React 19
+- **Framework**: Built with **React 19** and **Vite** for optimized build times and modern rendering patterns.
+- **State Management**: Context-based authentication (`AuthContext`) with JWT persistence and Axios-based API service layer.
+- **UI/UX**: Styled with **Tailwind CSS** and **Framer Motion** for a fluid, interactive experience.
+- **Data Visualization**: Real-time analytics dashboards using **Recharts** to visualize application trends and skill gaps.
+
+### 2. Backend: Asynchronous FastAPI Orchestration
+- **API Layer**: **FastAPI** provides a high-performance, asynchronous RESTful API with Pydantic-driven data validation.
+- **ORM & Database**: **SQLAlchemy** with **Alembic** migrations, supporting **PostgreSQL** for production and **SQLite** for development.
+- **Background Workers**: **Celery** with **Redis** handles heavy computational tasks like resume parsing and PDF generation asynchronously to ensure a responsive UI.
+
+### 3. AI Service Layer: Unified LLM Orchestration
+- **Abstraction Layer**: A **Unified LLM Service** provides a consistent interface for **Google Gemini**, **OpenAI (GPT-4o)**, and **Anthropic (Claude 3.5)**.
+- **Semantic Matchmaking**: Job-to-resume matching using **vector embeddings** generated via **HuggingFace (Sentence-Transformers)** or OpenAI, utilizing **Cosine Similarity** for contextual relevance.
+- **Hybrid Scoring**: Combines heuristic rule-based patterns with LLM analysis for robust ATS scoring.
+
+---
+
+## 🌟 Core Features & Modules
+
+### 📄 Intelligent Resume Management
+- **Asynchronous Parsing**: Uses `pdfplumber` for high-fidelity text extraction followed by an AI-driven normalization pipeline.
+- **Resume Builder**: Modular, section-by-section builder for creating ATS-optimized resumes from scratch.
+- **ATS Optimizer**: Analyzes tone, grammar, and keyword gaps against target job descriptions to provide actionable feedback.
+
+### 🎯 Job Center & Matchmaking
+- **Semantic Discovery**: Ranks job listings based on contextual alignment with user profiles rather than simple keyword matching.
+- **Application Tracking**: A **Kanban-style board** implementing full CRUD operations for managing the job application pipeline (Applied → Interview → Offer).
+
+### 🎤 AI-Driven Interview Preparation
+- **Contextual Practice**: Generates practice questions tailored to specific job roles and user experience.
+- **Real-time Feedback**: Provides AI-powered analysis of interview responses, focusing on clarity, technical depth, and delivery.
+
+### 📈 Analytics & Career Insights
+- **Skill Gap Analysis**: Visualizes the alignment between user skills and target industry requirements.
+- **Engagement Metrics**: Tracks application success rates and profile visibility.
+
+---
+
+## 🧪 Evaluation & Quality Assurance
+
+GrobsAI includes a rigorous **Evaluation Framework** (`EvaluationService`) that continuously monitors system performance:
+- **Completeness**: Automated codebase scanning (Python/React) to track feature implementation progress.
+- **Accuracy**: Real-world evaluation using a dataset of 500+ resumes to calibrate ATS scores and NER precision.
+- **Latency Monitoring**: Sub-millisecond precision tracking using `perf_counter` to ensure optimal AI response times.
 
 ---
 
 ## 🚀 Quick Start (Local Development)
 
 ### Prerequisites
-- **Node.js** (v18+)
-- **Python** (v3.10+)
-- **PostgreSQL** (or SQLite for development)
-- **Redis** (for Celery workers)
+- **Node.js** (v18+) & **Python** (v3.10+)
+- **PostgreSQL** & **Redis** (for background workers)
 
-### Step 1: Setup the Backend
+### 🛠️ Backend Setup
 ```bash
 cd Backend
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # venv\Scripts\activate on Windows
 pip install -r requirements.txt
-cp .env.example .env      # Configure your environment variables
-python setup.py           # Initialize database
+python setup.py           # Initialize DB and seed jobs
 uvicorn app.main:app --reload
 ```
 
-### Step 2: Setup the Frontend
+### 💻 Frontend Setup
 ```bash
 cd Frontend
 npm install
-cp .env.example .env      # Configure your environment variables
 npm run dev
 ```
 
 ---
 
-## 🔑 AI Features Setup
-
-To enable AI features (resume analysis, ATS scoring, interview questions), add an API key to your backend `.env`:
-
-### Google Gemini (Recommended)
-```env
-LLM_PROVIDER=google
-GEMINI_API_KEY=your-key-from-aistudio.google.com
-```
-
-### OpenAI
-```env
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your-openai-key
-```
-
-### Anthropic Claude
-```env
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your-anthropic-key
-```
+## 🔒 Security & Privacy
+- **Authentication**: JWT-based system with access/refresh token rotation.
+- **Data Protection**: Sensitive PII is **encrypted at rest** using Fernet symmetric encryption.
+- **Isolation**: Strict CORS policies and Role-Based Access Control (RBAC).
 
 ---
 
-## ✅ Core Features
-
-- **Resume Management**: Upload PDF resumes or create them with the built-in builder.
-- **AI Resume Analysis**: ATS score calculation, keyword analysis, and AI-powered optimization.
-- **Job Search**: Personalized job recommendations and application tracking.
-- **Interview Preparation**: AI-generated practice questions and mock interview sessions with real-time feedback.
-- **Analytics Dashboard**: Real-time application statistics and activity tracking.
+## 📖 Related Documentation
+- [**Methodology**](./docs/METHODOLOGY.md) - Deep dive into design decisions and algorithms.
+- [**Backend Docs**](./Backend/README.md) - Detailed API references and service patterns.
+- [**Frontend Docs**](./Frontend/README.md) - Component architecture and design system.
 
 ---
-
-## 🧪 Testing & Quality
-
-### Backend Tests
-```bash
-cd Backend
-pytest tests/ -v
-```
-
-### Frontend Quality
-```bash
-cd Frontend
-npm run lint
-```
-
----
-
-## 📖 Additional Documentation
-
-- [Backend Documentation](./Backend/README.md)
-- [Frontend Documentation](./Frontend/README.md)
-- [System Architecture](./docs/METHODOLOGY.md)
-- [User Navigation Flow](./docs/user_navigation.md)
-
----
-
-## 🛠️ Troubleshooting
-
-- **Backend won't start**: Ensure `venv` is active and `SECRET_KEY` is set in `.env`.
-- **Frontend "Failed to load"**: Verify backend is running on port 8000 and `VITE_API_URL` is correct.
-- **No jobs showing**: Run `python setup.py` to seed sample jobs.
-- **AI features not working**: Check `LLM_PROVIDER` and API key in backend `.env`.
-
----
-
-## 📄 License
-
-This project is proprietary and part of the GrobsAI platform.
+*GrobsAI is proprietary software focused on empowering the next generation of professional talent through AI.*

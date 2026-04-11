@@ -205,7 +205,7 @@ const PracticeQuestions = () => {
           {/* Questions List and Detail */}
           <div className="grid grid-cols-1 gap-6">
             <div className="space-y-3">
-              <AnimatePresence mode="wait">
+<AnimatePresence>
                 {questions.length > 0 ? (
                   questions.map((q, idx) => (
                     <motion.div

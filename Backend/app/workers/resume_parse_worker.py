@@ -168,15 +168,11 @@ def process_resume_parsing(resume_id: int, user_id: int) -> dict:
         db.close()
 
 
-# Celery task (if Celery is available)
-try:
-    from celery import Celery
-    celery_app = Celery('resume_parse_worker')
-    
-    @celery_app.task(name='resume_parse_worker.process')
+from app.workers.celery_app import celery
+
+# Celery task
+if celery:
+    @celery.task(name='resume_parse_worker.process')
     def celery_process_resume_parsing(resume_id: int, user_id: int):
         return process_resume_parsing(resume_id, user_id)
-except ImportError:
-    # Celery not available, use as regular function
-    pass
 

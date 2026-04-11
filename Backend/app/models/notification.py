@@ -18,6 +18,7 @@ class Notification(Base):
     title = Column(String, nullable=False)
     message = Column(Text, nullable=False)
     type = Column(String, default="info")  # info, success, warning, error
+    notification_type = Column(String, nullable=True) # alternative name for type
     is_read = Column(Boolean, default=False)
     
     # Optional link/action

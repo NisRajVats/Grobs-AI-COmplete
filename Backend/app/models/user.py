@@ -1,7 +1,7 @@
 """
 User models for authentication and subscriptions.
 """
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database.session import Base
@@ -25,6 +25,9 @@ class User(Base):
     title = Column(String, nullable=True)
     linkedin_url = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
+    bio = Column(Text, nullable=True)  # User bio/summary
+    website = Column(String, nullable=True)  # Portfolio or personal website
+    experience_level = Column(String, nullable=True)  # e.g., entry, mid, senior, lead
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -45,16 +48,17 @@ class SubscriptionPlan(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
     description = Column(Text)
-    price = Column(Integer)  # Price in cents
+    price = Column(Float)  # Price
     duration_days = Column(Integer)  # Subscription duration in days
-    features = Column(Text)  # Comma-separated features
+    duration_months = Column(Integer, default=1)
+    features = Column(JSON)  # Store as JSON
     is_active = Column(Boolean, default=True)
     stripe_price_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    subscriptions = relationship("UserSubscription", back_populates="plan")
+    user_subscriptions = relationship("UserSubscription", back_populates="plan")
 
 
 class UserSubscription(Base):
@@ -64,13 +68,44 @@ class UserSubscription(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     plan_id = Column(Integer, ForeignKey("subscription_plans.id"))
-    start_date = Column(String)
-    end_date = Column(String)
+    start_date = Column(DateTime)
+    end_date = Column(DateTime)
+    is_active = Column(Boolean, default=True)
     status = Column(String, default="active")  # active, cancelled, expired
     stripe_subscription_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
     user = relationship("User", back_populates="subscriptions")
-    plan = relationship("SubscriptionPlan", back_populates="subscriptions")
+    plan = relationship("SubscriptionPlan", back_populates="user_subscriptions")
+
+
+class UserSettings(Base):
+    """User settings model for storing preferences."""
+    __tablename__ = "user_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    
+    # Notification settings
+    email_notifications = Column(Boolean, default=True)
+    push_notifications = Column(Boolean, default=False)
+    job_alerts = Column(Boolean, default=True)
+    weekly_digest = Column(Boolean, default=True)
+    marketing_emails = Column(Boolean, default=False)
+    
+    # UI preferences (stored server-side for consistency)
+    dark_mode = Column(Boolean, default=True)
+    theme = Column(String, default="dark")
+    language = Column(String, default="en")
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="settings")
+
+
+# Add settings relationship to User model
+User.settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
 

@@ -1,7 +1,7 @@
 """
 Job models for job listings, applications, and saved jobs.
 """
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Float, JSON
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Float, JSON, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database.session import Base
@@ -10,36 +10,50 @@ from app.database.session import Base
 class Job(Base):
     """
     Job listing model.
+    Enhanced for production-grade job aggregation and matching.
     """
     __tablename__ = "jobs"
     
     id = Column(Integer, primary_key=True, index=True)
     
     # Job details
-    job_title = Column(String, nullable=False, index=True)
-    company_name = Column(String, nullable=False)
+    title = Column(String, nullable=False, index=True)
+    job_title = Column(String, nullable=True, index=True)
+    company = Column(String, nullable=False, index=True)
+    company_name = Column(String, nullable=True, index=True)
     location = Column(String, nullable=True)
     job_type = Column(String, nullable=True)  # Full-time, Part-time, Contract, etc.
-    skills_required = Column(Text, nullable=True)  # JSON array
+    skills_required = Column(JSON, nullable=True)  # JSON array
     experience_required = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
     job_description = Column(Text, nullable=True)
+    requirements = Column(Text, nullable=True)
     salary_range = Column(String, nullable=True)
-    job_link = Column(String, nullable=True)
+    salary_min = Column(Integer, nullable=True)
+    salary_max = Column(Integer, nullable=True)
+    remote = Column(Boolean, default=False)
+    job_link = Column(String, nullable=True, unique=True, index=True)  # Unique constraint for deduplication
     posted_date = Column(String, nullable=True)
     source = Column(String, nullable=True)  # Greenhouse, Lever, Indeed, etc.
     
+    # AI-enhanced fields
+    tags = Column(JSON, nullable=True)  # JSON array: ["backend", "remote", "fresher"]
+    match_score = Column(Float, nullable=True)  # Overall match score (0-100)
+    selection_probability = Column(String, nullable=True)  # High/Medium/Low
+    
     # Embeddings for semantic search
-    job_embedding = Column(Text, nullable=True)  # JSON array for vector similarity
+    job_embedding = Column(JSON, nullable=True)  # JSON array for vector similarity
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     applications = relationship("JobApplication", back_populates="job", cascade="all, delete-orphan")
     saved_by = relationship("SavedJob", back_populates="job", cascade="all, delete-orphan")
     # Additional relationships for scalable models
-    skills = relationship("JobSkill", back_populates="job", cascade="all, delete-orphan")
+    job_skills = relationship("JobSkill", back_populates="job", cascade="all, delete-orphan", overlaps="skills")
+    skills = relationship("Skill", secondary="job_skills", back_populates="jobs", overlaps="job_skills")
     embedding = relationship("JobEmbedding", back_populates="job", uselist=False, cascade="all, delete-orphan")
 
 
@@ -51,7 +65,8 @@ class JobSkill(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False)
-    skill_name = Column(String, nullable=False, index=True)
+    skill_id = Column(Integer, ForeignKey("skills.id"), nullable=True)
+    skill_name = Column(String, nullable=True, index=True)
     skill_category = Column(String, nullable=True)  # technical, soft, tool, framework
     importance = Column(Integer, default=1)  # 1=optional, 2=preferred, 3=required
     
@@ -59,7 +74,8 @@ class JobSkill(Base):
     created_at = Column(String, default=lambda: datetime.now().isoformat())
     
     # Relationships
-    job = relationship("Job", back_populates="skills")
+    job = relationship("Job", back_populates="job_skills", overlaps="skills")
+    skill = relationship("Skill", overlaps="jobs,skills")
 
 
 class JobEmbedding(Base):

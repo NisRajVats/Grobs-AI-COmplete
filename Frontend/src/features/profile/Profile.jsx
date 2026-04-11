@@ -62,11 +62,24 @@ const Profile = () => {
               <div className="flex-1">
                 <h2 className="text-2xl font-bold text-white">{user?.full_name || user?.email?.split('@')[0] || 'User'}</h2>
                 <p className="text-slate-400">{user?.title || 'Software Developer'}</p>
+                {user?.experience_level && <p className="text-sm text-blue-400 mt-1">{user.experience_level}</p>}
                 <div className="flex flex-wrap gap-4 mt-4 text-sm text-slate-500">
                   <span className="flex items-center gap-1"><Mail size={14} /> {user?.email}</span>
                   {user?.location && <span className="flex items-center gap-1"><MapPin size={14} /> {user.location}</span>}
                   {user?.created_at && <span className="flex items-center gap-1"><Calendar size={14} /> Joined {new Date(user.created_at).toLocaleDateString()}</span>}
                 </div>
+                {user?.bio && (
+                  <div className="mt-4 pt-4 border-t border-white/10">
+                    <p className="text-sm text-slate-400 leading-relaxed">{user.bio}</p>
+                  </div>
+                )}
+                {user?.website && (
+                  <div className="mt-2">
+                    <a href={user.website} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                      <Briefcase size={14} /> {user.website.replace(/^https?:\/\//, '')}
+                    </a>
+                  </div>
+                )}
               </div>
               <button onClick={() => navigate('/app/profile/edit')} className="p-3 bg-slate-800 rounded-xl text-slate-400 hover:text-white hover:bg-slate-700 transition-all">
                 <Edit3 size={20} />

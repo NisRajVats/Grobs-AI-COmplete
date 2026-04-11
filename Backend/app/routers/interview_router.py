@@ -1,9 +1,12 @@
 """
 Interview router for mock interviews and practice sessions.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime, timedelta
+import json
+import re
 
 from app.database.session import get_db
 from app.models import User, Resume, InterviewSession, InterviewQuestion, InterviewAnswer
@@ -18,10 +21,41 @@ from app.schemas.ai import (
 from app.utils.dependencies import get_current_user
 from app.services.ai_services.interview_ai import generate_interview_questions
 from app.services.llm_service import llm_service
-from datetime import datetime
-import json
 
 router = APIRouter(prefix="/api/interview", tags=["Interview"])
+
+# Rate limiting configuration
+RATE_LIMIT_SECONDS = 60  # Minimum seconds between feedback requests
+MAX_ANSWER_LENGTH = 5000  # Maximum characters for answer text
+
+# ==================== Helper Functions ====================
+
+def validate_answer_text(answer_text: Optional[str]) -> str:
+    """Validate and sanitize answer text."""
+    if not answer_text or not answer_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Answer text cannot be empty"
+        )
+    if len(answer_text) > MAX_ANSWER_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Answer text exceeds maximum length of {MAX_ANSWER_LENGTH} characters"
+        )
+    # Basic sanitization - remove potential script tags
+    sanitized = re.sub(r'<script.*?</script>', '', answer_text, flags=re.DOTALL | re.IGNORECASE)
+    return sanitized.strip()
+
+
+def check_rate_limit(last_feedback_time: Optional[str]) -> bool:
+    """Check if enough time has passed since last feedback request."""
+    if not last_feedback_time:
+        return True
+    try:
+        last_time = datetime.fromisoformat(last_feedback_time)
+        return datetime.now() - last_time > timedelta(seconds=RATE_LIMIT_SECONDS)
+    except (ValueError, TypeError):
+        return True
 
 
 # ==================== Endpoints ====================
@@ -111,7 +145,17 @@ async def generate_questions(
             ]
         }
     
-    return questions_data
+    # Flatten questions for the API response as expected by the frontend/tests
+    all_questions = []
+    structure = questions_data.get('interview_structure', {})
+    
+    for category in ['behavioral_questions', 'technical_questions', 'role_specific_questions', 'job_specific_questions']:
+        for q in structure.get(category, []):
+            q_copy = q.copy()
+            q_copy['type'] = category.replace('_questions', '')
+            all_questions.append(q_copy)
+            
+    return all_questions
 
 
 @router.post("/sessions", response_model=InterviewSessionResponse)
@@ -330,6 +374,9 @@ async def submit_answer(
     """
     Submit an answer to a question.
     """
+    # Validate answer text
+    validated_answer_text = validate_answer_text(answer_data.answer_text)
+    
     session = db.query(InterviewSession).filter(
         InterviewSession.id == session_id,
         InterviewSession.user_id == current_user.id
@@ -350,37 +397,49 @@ async def submit_answer(
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
     
-    # Check if answer already exists
+    # Check if answer already exists and has feedback (prevent resubmission after feedback)
     existing_answer = db.query(InterviewAnswer).filter(
         InterviewAnswer.session_id == session_id,
         InterviewAnswer.question_id == answer_data.question_id
     ).first()
     
+    if existing_answer and existing_answer.feedback:
+        raise HTTPException(
+            status_code=400, 
+            detail="Answer already submitted and feedback provided. Cannot resubmit."
+        )
+    
     if existing_answer:
-        # Update existing answer
-        existing_answer.answer_text = answer_data.answer_text
+        # Update existing answer (only if no feedback yet)
+        existing_answer.answer_text = validated_answer_text
         existing_answer.time_taken_seconds = answer_data.time_taken_seconds
+        answer = existing_answer
     else:
         # Create new answer
         answer = InterviewAnswer(
             session_id=session_id,
             question_id=answer_data.question_id,
-            answer_text=answer_data.answer_text,
+            answer_text=validated_answer_text,
             time_taken_seconds=answer_data.time_taken_seconds
         )
         db.add(answer)
     
     db.commit()
     
-    # Update session progress
-    session.current_question_index = question.order_index + 1
+    # Update session progress - count answered questions instead of using order_index
+    answered_count = db.query(InterviewAnswer).filter(
+        InterviewAnswer.session_id == session_id,
+        InterviewAnswer.answer_text.isnot(None)
+    ).count()
     
-    # Check if session is complete
     total_questions = db.query(InterviewQuestion).filter(
         InterviewQuestion.session_id == session_id
     ).count()
     
-    if session.current_question_index >= total_questions:
+    session.current_question_index = answered_count
+    
+    # Check if all questions have been answered
+    if answered_count >= total_questions:
         session.status = "completed"
         session.completed_at = datetime.now().isoformat()
     

@@ -146,6 +146,13 @@ class ResumeManager:
         resume.title = resume_data.get("title", resume.title)
         resume.target_role = resume_data.get("target_role", resume.target_role)
         resume.template_name = resume_data.get("template_name", resume.template_name)
+        
+        # Update scores if provided (important for optimization sync)
+        if "ats_score" in resume_data:
+            resume.ats_score = resume_data["ats_score"]
+        if "analysis_score" in resume_data:
+            resume.analysis_score = resume_data["analysis_score"]
+            
         resume.updated_at = datetime.now()
 
         # Update parsed_data - merge existing, provided, and root fields
@@ -180,6 +187,10 @@ class ResumeManager:
             pd["linkedin_url"] = resume_data["linkedin_url"]
         if "summary" in resume_data:
             pd["summary"] = resume_data["summary"]
+        if "title" in resume_data:
+            pd["title"] = resume_data["title"]
+        if "target_role" in resume_data:
+            pd["target_role"] = resume_data["target_role"]
         
         # 3. Sync nested fields into parsed_data to keep everything in sync
         for field in ["education", "experience", "projects", "skills"]:
@@ -191,6 +202,13 @@ class ResumeManager:
         # Update nested data in structured tables
         self._update_nested_data(resume, resume_data)
         
+        # Recalculate ATS score if resume content was updated and score not explicitly provided
+        if "ats_score" not in resume_data and any(k in resume_data for k in ["summary", "experience", "education", "projects", "skills"]):
+            # Run this in the background or just call it here since it's an update
+            # We can't easily await here as this is a sync method, but we can call the calculator
+            # For now, we rely on the frontend calling ats-check or the explicit ats_score provided during optimization apply
+            pass
+
         # Create new version
         self._create_version(resume)
         

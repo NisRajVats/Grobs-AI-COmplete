@@ -134,14 +134,11 @@ def _build_resume_text(resume: Resume, content: ResumeContent) -> str:
     return "\n".join(parts)
 
 
-# Celery task wrapper (if Celery is available)
-try:
-    from celery import Celery
-    celery_app = Celery('resume_embedding_worker')
-    
-    @celery_app.task(name='resume_embedding_worker.process')
+from app.workers.celery_app import celery
+
+# Celery task wrapper
+if celery:
+    @celery.task(name='resume_embedding_worker.process')
     def celery_process_resume_embedding(resume_id: int, user_id: int):
         return process_resume_embedding(resume_id, user_id)
-except ImportError:
-    pass
 

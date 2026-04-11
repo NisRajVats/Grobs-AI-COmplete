@@ -113,8 +113,13 @@ def _extract_and_store_skills(job: Job, db: Session) -> dict:
     # Also check legacy skills_required field
     if job.skills_required:
         try:
-            legacy_skills = json.loads(job.skills_required)
-            search_text += " " + " ".join(legacy_skills).lower()
+            if isinstance(job.skills_required, str):
+                legacy_skills = json.loads(job.skills_required)
+            else:
+                legacy_skills = job.skills_required
+            
+            if legacy_skills:
+                search_text += " " + " ".join(legacy_skills).lower()
         except:
             pass
     
@@ -206,18 +211,15 @@ def _build_job_text(job: Job) -> str:
     return "\n".join(parts)
 
 
-# Celery task wrapper (if Celery is available)
-try:
-    from celery import Celery
-    celery_app = Celery('job_ingestion_worker')
-    
-    @celery_app.task(name='job_ingestion_worker.process')
+from app.workers.celery_app import celery
+
+# Celery task wrapper
+if celery:
+    @celery.task(name='job_ingestion_worker.process')
     def celery_process_job_ingestion(job_id: int):
         return process_job_ingestion(job_id)
     
-    @celery_app.task(name='job_ingestion_worker.process_batch')
+    @celery.task(name='job_ingestion_worker.process_batch')
     def celery_process_batch_job_ingestion(job_ids: list):
         return process_batch_job_ingestion(job_ids)
-except ImportError:
-    pass
 

@@ -62,3 +62,6 @@ build/
 .vscode/
 .history/
 *.code-workspace
+
+# Test Reports
+Backend/test_reports/

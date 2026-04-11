@@ -22,6 +22,7 @@ class InterviewSession(Base):
     job_title = Column(String, nullable=True)
     company = Column(String, nullable=True)
     job_description = Column(Text, nullable=True)
+    difficulty = Column(String, default="medium") # easy, medium, hard
     
     # Status
     status = Column(String, default="in_progress")  # in_progress, completed

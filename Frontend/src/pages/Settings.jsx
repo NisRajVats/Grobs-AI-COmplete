@@ -1,19 +1,60 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Lock, Bell, Moon, Globe, LogOut, ChevronRight, CheckCircle2, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { authAPI } from '../services/api';
+import { authAPI, usersAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
 const Settings = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const { setDarkMode: setThemeMode } = useTheme();
+  const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ old_password: '', new_password: '', confirm: '' });
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMsg, setPwMsg] = useState('');
   const [pwError, setPwError] = useState('');
-  const [darkMode, setDarkMode] = useState(true);
-  const [emailNotifs, setEmailNotifs] = useState(true);
+  const [settings, setSettings] = useState({
+    dark_mode: true,
+    email_notifications: true,
+    job_alerts: true,
+    weekly_digest: true,
+    marketing_emails: false
+  });
+  const [savingSettings, setSavingSettings] = useState({});
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const res = await usersAPI.getSettings();
+      setSettings(res.data);
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSettingChange = async (key, value) => {
+    setSavingSettings(prev => ({ ...prev, [key]: true }));
+    try {
+      await usersAPI.updateSettings({ [key]: value });
+      setSettings(prev => ({ ...prev, [key]: value }));
+      
+      // Update theme if dark mode changed
+      if (key === 'dark_mode') {
+        setThemeMode(value);
+      }
+    } catch (err) {
+      console.error('Failed to save setting:', err);
+    } finally {
+      setSavingSettings(prev => ({ ...prev, [key]: false }));
+    }
+  };
 
   const handlePasswordChange = async () => {
     if (passwords.new_password !== passwords.confirm) {
@@ -46,11 +87,22 @@ const Settings = () => {
     },
     {
       title: 'Preferences', icon: Globe, items: [
-        { label: 'Dark Mode', toggle: true, value: darkMode, onChange: setDarkMode },
-        { label: 'Email Notifications', toggle: true, value: emailNotifs, onChange: setEmailNotifs },
+        { label: 'Dark Mode', toggle: true, value: settings.dark_mode, onChange: (v) => handleSettingChange('dark_mode', v), loading: savingSettings.dark_mode },
+        { label: 'Email Notifications', toggle: true, value: settings.email_notifications, onChange: (v) => handleSettingChange('email_notifications', v), loading: savingSettings.email_notifications },
+        { label: 'Job Alerts', toggle: true, value: settings.job_alerts, onChange: (v) => handleSettingChange('job_alerts', v), loading: savingSettings.job_alerts },
+        { label: 'Weekly Digest', toggle: true, value: settings.weekly_digest, onChange: (v) => handleSettingChange('weekly_digest', v), loading: savingSettings.weekly_digest },
+        { label: 'Marketing Emails', toggle: true, value: settings.marketing_emails, onChange: (v) => handleSettingChange('marketing_emails', v), loading: savingSettings.marketing_emails },
       ]
     },
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="animate-spin text-blue-400" size={40} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto space-y-8 pb-20">
@@ -70,7 +122,11 @@ const Settings = () => {
               <span className="text-slate-300">{item.label}</span>
               {item.arrow && <ChevronRight size={18} className="text-slate-500" />}
               {item.toggle !== undefined && (
-                <button onClick={e => { e.stopPropagation(); item.onChange(!item.value); }} className={`w-12 h-6 rounded-full transition-all ${item.value ? 'bg-blue-600' : 'bg-slate-600'} relative`}>
+                <button 
+                  onClick={e => { e.stopPropagation(); item.onChange(!item.value); }} 
+                  disabled={item.loading}
+                  className={`w-12 h-6 rounded-full transition-all relative ${item.value ? 'bg-blue-600' : 'bg-slate-600'} ${item.loading ? 'opacity-50 cursor-wait' : ''}`}
+                >
                   <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${item.value ? 'left-7' : 'left-1'}`} />
                 </button>
               )}

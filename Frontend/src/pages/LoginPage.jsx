@@ -39,9 +39,14 @@ const LoginPage = () => {
       navigate('/app/dashboard');
     } catch (err) {
       console.error('Login error:', err);
-      const rawDetail = err.response?.data?.detail;
+      const status = err.response?.status;
+      const rawDetail = err.response?.data?.detail || {};
+      const errorData = typeof rawDetail === 'object' ? rawDetail : {};
+      
       let message = 'Invalid email or password. Please try again.';
-      if (typeof rawDetail === 'string') {
+      if (status === 401 && errorData.message) {
+        message = errorData.message;
+      } else if (typeof rawDetail === 'string') {
         message = rawDetail;
       } else if (Array.isArray(rawDetail)) {
         message = rawDetail.map(e => e.msg).join(', ');

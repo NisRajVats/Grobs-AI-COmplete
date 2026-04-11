@@ -54,6 +54,10 @@ def process_email(
         return {"success": False, "error": str(e)}
 
 
+# Alias for generic process call
+process = process_email
+
+
 def process_interview_reminder(
     recipient_email: str,
     user_name: str,
@@ -117,11 +121,11 @@ def process_resume_analysis_notification(
     )
 
 
+from app.workers.celery_app import celery
+
 # Celery task wrapper
-try:
-    from celery import shared_task
-    
-    @shared_task(name='email_worker.process')
+if celery:
+    @celery.task(name='email_worker.process')
     def celery_process_email(
         recipient_email: str,
         subject: str,
@@ -131,7 +135,7 @@ try:
     ):
         return process_email(recipient_email, subject, template_name, template_data, attachments)
     
-    @shared_task(name='email_worker.interview_reminder')
+    @celery.task(name='email_worker.interview_reminder')
     def celery_process_interview_reminder(
         recipient_email: str,
         user_name: str,
@@ -142,7 +146,7 @@ try:
     ):
         return process_interview_reminder(recipient_email, user_name, job_title, company, interview_date, interview_time)
     
-    @shared_task(name='email_worker.job_match')
+    @celery.task(name='email_worker.job_match')
     def celery_process_job_match_notification(
         recipient_email: str,
         user_name: str,
@@ -152,7 +156,7 @@ try:
     ):
         return process_job_match_notification(recipient_email, user_name, job_title, company, match_score)
     
-    @shared_task(name='email_worker.resume_analysis')
+    @celery.task(name='email_worker.resume_analysis')
     def celery_process_resume_analysis_notification(
         recipient_email: str,
         user_name: str,
@@ -160,6 +164,3 @@ try:
         ats_score: int
     ):
         return process_resume_analysis_notification(recipient_email, user_name, resume_title, ats_score)
-        
-except ImportError:
-    logger.warning("Celery not found, email tasks will not be available as background jobs")

@@ -6,11 +6,12 @@ Pydantic models for job application endpoints.
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from enum import Enum
 
 
 # ==================== Application Status Enum ====================
 
-class ApplicationStatus:
+class ApplicationStatus(str, Enum):
     """Possible application statuses."""
     APPLIED = "applied"
     REVIEWING = "reviewing"
@@ -29,12 +30,12 @@ class ApplicationCreate(BaseModel):
     job_id: Optional[int] = None
     resume_id: Optional[int] = None
     notes: Optional[str] = None
-    status: str = "applied"
+    status: ApplicationStatus = ApplicationStatus.APPLIED
 
 
 class ApplicationUpdate(BaseModel):
     """Schema for updating a job application."""
-    status: Optional[str] = None
+    status: Optional[ApplicationStatus] = None
     applied_date: Optional[str] = None
     follow_up_date: Optional[str] = None
     notes: Optional[str] = None
@@ -49,7 +50,7 @@ class ApplicationResponse(BaseModel):
     resume_id: Optional[int] = None
     job_title: Optional[str] = None
     company: Optional[str] = None
-    status: str
+    status: ApplicationStatus
     applied_date: Optional[str] = None
     follow_up_date: Optional[str] = None
     notes: Optional[str] = None
@@ -73,7 +74,7 @@ class ApplicationListResponse(BaseModel):
 
 class ApplicationStatusUpdate(BaseModel):
     """Schema for updating application status."""
-    status: str = Field(..., description="New status for the application")
+    status: ApplicationStatus = Field(..., description="New status for the application")
     notes: Optional[str] = Field(None, description="Optional notes about the status change")
 
 

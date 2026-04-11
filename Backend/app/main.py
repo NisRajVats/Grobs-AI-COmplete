@@ -83,7 +83,8 @@ class SimpleRateLimiter:
 
 
 # Initialize rate limiter
-rate_limiter = SimpleRateLimiter(requests_per_minute=settings.RATE_LIMIT_PER_MINUTE)
+# Increase limit for development to avoid blocking polling
+rate_limiter = SimpleRateLimiter(requests_per_minute=settings.RATE_LIMIT_PER_MINUTE * 5)
 
 
 # ==================== Lifespan ====================
@@ -93,6 +94,17 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     logger.info("Starting GrobsAI Backend...")
+    
+    # Validate LLM provider configuration
+    from app.services.llm_service import llm_service
+    llm_status = llm_service.validate_api_keys()
+    
+    if llm_status["is_valid"]:
+        logger.info(f"LLM Provider: {llm_status['active_provider']} configured successfully")
+    else:
+        logger.warning("No LLM provider configured - using heuristic fallback mode")
+        for warning in llm_status.get("warnings", []):
+            logger.warning(warning)
     
     # Create database tables in development only
     if settings.ENVIRONMENT == "development":
@@ -137,6 +149,11 @@ async def rate_limit_handler(request: Request, exc: Exception):
 @app.middleware("http")
 async def log_requests_and_rate_limit(request: Request, call_next):
     """Log all HTTP requests and apply rate limiting."""
+    # Handle CORS preflight requests - let CORS middleware handle them
+    if request.method == "OPTIONS":
+        response = await call_next(request)
+        return response
+    
     start_time = time.time()
     
     # Get client IP
@@ -171,21 +188,31 @@ async def log_requests_and_rate_limit(request: Request, call_next):
     return response
 
 
-# ==================== CORS Middleware (Outermost) ====================
+# ==================== CORS Middleware (Must be outermost) ====================
+# Move CORS middleware AFTER other middleware to ensure it wraps all responses (including errors from Rate Limiter).
+# In FastAPI/Starlette, the LAST middleware added is the OUTERMOST.
 
-# CORS middleware - Allow specific origins for development
-# When allow_credentials=True, allow_origins cannot be ["*"]
-origins = settings.CORS_ORIGINS
-if isinstance(origins, str):
+# Parse CORS origins from settings
+cors_origins = settings.CORS_ORIGINS
+if isinstance(cors_origins, str):
     try:
         import json
-        origins = json.loads(origins)
-    except:
-        origins = [o.strip() for o in origins.split(",") if o.strip()]
+        cors_origins = json.loads(cors_origins)
+    except Exception:
+        cors_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+
+# Ensure frontend origins are always allowed in development
+if settings.ENVIRONMENT == "development":
+    dev_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5174", "http://127.0.0.1:5174"]
+    for origin in dev_origins:
+        if origin not in cors_origins:
+            cors_origins.append(origin)
+
+logger.info(f"CORS enabled for origins: {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -219,10 +246,16 @@ app.include_router(evaluation_router)
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    from app.services.llm_service import llm_service
+    
+    # Get LLM provider status
+    llm_status = llm_service.validate_api_keys()
+    
     return {
         "status": "healthy",
         "service": settings.APP_NAME,
-        "version": settings.APP_VERSION
+        "version": settings.APP_VERSION,
+        "llm_provider": llm_status
     }
 
 

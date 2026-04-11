@@ -257,16 +257,38 @@ def register_exception_handlers(app):
     async def grobs_exception_handler(request: Request, exc: GrobsAIException):
         """Handle all GrobsAI custom exceptions."""
         logger.warning(f"GrobsAI Exception: {exc.message}")
-        return JSONResponse(
+        response = JSONResponse(
             status_code=exc.status_code,
             content=exc.to_dict()
         )
+        # Ensure CORS headers are present for cross-origin requests
+        origin = request.headers.get("Origin", "")
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+    
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """Handle FastAPI HTTPExceptions (including auth errors)."""
+        logger.info(f"HTTP Exception: {exc.status_code} - {exc.detail}")
+        response = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers if exc.headers else None
+        )
+        # Ensure CORS headers are present for cross-origin requests
+        origin = request.headers.get("Origin", "")
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
     
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """Handle unexpected exceptions."""
         logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
-        return JSONResponse(
+        response = JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": "InternalServerError",
@@ -274,4 +296,10 @@ def register_exception_handlers(app):
                 "details": {}
             }
         )
+        # Ensure CORS headers are present for cross-origin requests
+        origin = request.headers.get("Origin", "")
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
 

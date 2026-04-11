@@ -30,6 +30,9 @@ class UserUpdate(BaseModel):
     title: Optional[str] = None
     linkedin_url: Optional[str] = None
     avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    website: Optional[str] = None
+    experience_level: Optional[str] = None
 
 
 class UserResponse(UserBase):
@@ -56,6 +59,9 @@ class UserProfileResponse(UserBase):
     title: Optional[str] = None
     linkedin_url: Optional[str] = None
     avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    website: Optional[str] = None
+    experience_level: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -91,6 +97,8 @@ class ProfileUpdate(BaseModel):
     location: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    website: Optional[str] = None
+    experience_level: Optional[str] = None
 
 
 # ==================== Notification Schemas ====================
@@ -133,6 +141,16 @@ class UserSettings(BaseModel):
     job_alerts: bool = True
     weekly_digest: bool = True
     marketing_emails: bool = False
+    dark_mode: bool = True
+
+
+class UserSettingsUpdate(BaseModel):
+    """Schema for updating user settings."""
+    email_notifications: Optional[bool] = None
+    job_alerts: Optional[bool] = None
+    weekly_digest: Optional[bool] = None
+    marketing_emails: Optional[bool] = None
+    dark_mode: Optional[bool] = None
 
 
 class UserSettingsResponse(UserSettings):

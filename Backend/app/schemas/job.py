@@ -4,7 +4,7 @@ Job Schemas
 Pydantic models for job endpoints.
 """
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Any, Union
 from datetime import datetime
 
 
@@ -67,12 +67,15 @@ class JobResponse(BaseModel):
     location: Optional[str] = None
     job_type: Optional[str] = None
     job_description: Optional[str] = None
-    skills_required: Optional[str] = None
+    skills_required: Optional[Union[str, List[str]]] = None
     experience_required: Optional[str] = None
     salary_range: Optional[str] = None
     job_link: Optional[str] = None
     posted_date: Optional[str] = None
     source: Optional[str] = None
+    tags: Optional[Union[str, List[str]]] = None
+    match_score: Optional[float] = None
+    selection_probability: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -120,6 +123,27 @@ class JobMatchResponse(BaseModel):
         from_attributes = True
 
 
+# ==================== Live Job Schemas ====================
+
+class JobResult(BaseModel):
+    """Unified schema for live jobs from multiple sources."""
+    job_title: str
+    company_name: str
+    location: Optional[str] = None
+    job_link: str
+    source: str
+    job_description: Optional[str] = None
+    posted_date: Optional[str] = None
+    salary_range: Optional[str] = None
+    match_probability: float = 0.0
+    selection_chance: Optional[str] = None
+
+class LiveJobSearchResponse(BaseModel):
+    """Response schema for live job search."""
+    jobs: List[JobResult]
+    total: int
+    resume_id: Optional[int] = None
+
 # ==================== Job Embedding Schemas ====================
 
 class JobEmbeddingResponse(BaseModel):
@@ -132,6 +156,7 @@ class JobEmbeddingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        protected_namespaces = ()
 
 
 # ==================== Saved Job Schemas ====================

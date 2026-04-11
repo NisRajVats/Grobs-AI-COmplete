@@ -76,7 +76,7 @@ class AuthService:
         # Check if user exists
         existing_user = self.db.query(User).filter(User.email == email).first()
         if existing_user:
-            raise AlreadyExistsError("User", email)
+            raise AlreadyExistsError("User", f"Account with email '{email}' already exists. Please login instead.")
         
         # Hash password and create user
         hashed_password = get_password_hash(password)
@@ -88,6 +88,7 @@ class AuthService:
             email=email,
             hashed_password=hashed_password,
             full_name=full_name,
+            is_active=True,
             **extra_fields
         )
         
@@ -333,7 +334,7 @@ class AuthService:
         Raises:
             InvalidTokenError: If token is invalid
         """
-        email = verify_password_reset_token(reset_token)
+        email = self.verify_password_reset_token(reset_token)
         
         if not email:
             raise InvalidTokenError("Invalid or expired reset token")
@@ -350,6 +351,18 @@ class AuthService:
         logger.info(f"Password reset completed for: {email}")
         
         return True
+
+    def verify_password_reset_token(self, token: str) -> Optional[str]:
+        """
+        Verify a password reset token and return the email.
+        
+        Args:
+            token: Password reset token
+            
+        Returns:
+            Email address if token is valid, None otherwise
+        """
+        return verify_password_reset_token(token)
     
     def change_password(
         self,

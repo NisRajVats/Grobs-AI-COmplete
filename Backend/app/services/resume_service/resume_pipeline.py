@@ -1,556 +1,409 @@
 """
-Unified Resume Processing Pipeline Service
-
-Central orchestrator for the complete resume processing workflow:
-
-Resume Upload
-    ↓
-Resume Parsing (extract text, contact info, structured data)
-    ↓
-Resume Content Storage (store parsed data)
-    ↓
-Embedding Generation (create vector embeddings)
-    ↓
-ATS Analysis (calculate scores, identify keywords)
-    ↓
-Resume Optimization (AI-powered improvements)
-    ↓
-Job Matching (vector similarity search)
-
-Each step depends on the previous step completing successfully.
+Resume Pipeline Service - Implementation
+=======================================
+Orchestrates the resume processing flow:
+Parsing -> Embedding -> ATS Analysis -> Job Matching
 """
-import os
+from __future__ import annotations
+
 import json
 import logging
-from typing import Dict, List, Optional, Any
+import os
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import Resume, ResumeContent, ResumeAnalysis, ResumeEmbedding, ResumeVersion, Education, Experience, Project, Skill
-from app.utils.encryption import encrypt, decrypt
+from app.models import (
+    Education, Experience, Project, Resume, ResumeAnalysis,
+    ResumeContent, ResumeEmbedding, ResumeVersion, Skill,
+)
+from app.utils.encryption import decrypt, encrypt
 from app.services.resume_service.parser import parse_resume as parse_resume_file
 from app.services.resume_service.ats_analyzer import calculate_ats_score as calculate_ats
-from app.services.resume_service.optimizer import ResumeOptimizer
-from app.services.llm_service import llm_service
+from app.services.resume_service.embedding_service import get_embedding_service
+from app.services.job_service.job_matcher import JobMatcher
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+def _ok(stage: str, **extra) -> Dict[str, Any]:
+    return {"success": True, "stage": stage, **extra}
+
+def _err(stage: str, error: str, **extra) -> Dict[str, Any]:
+    return {"success": False, "stage": stage, "error": error, **extra}
 
 class ResumePipelineService:
-    """
-    Unified service for orchestrating resume processing pipeline.
-    Ensures proper sequencing: parsing → embedding → ATS → optimization → matching.
-    """
-    
-    def __init__(self, db: Session):
+    def __init__(self, db: Session) -> None:
         self.db = db
-    
-    # ==================== Pipeline Stages ====================
-    
-    async def process_resume_upload(
-        self,
-        resume_id: int,
-        file_path: str,
-        user_id: int
-    ) -> Dict[str, Any]:
-        """
-        Process uploaded resume through the full pipeline.
-        
-        Args:
-            resume_id: ID of the resume
-            file_path: Path to the resume file
-            user_id: ID of the user
-            
-        Returns:
-            Dictionary with pipeline results
-        """
-        results = {
+
+    async def process_resume_upload(self, resume_id: int, file_path: str, user_id: int) -> Dict[str, Any]:
+        """Runs the full processing pipeline for an uploaded resume."""
+        import asyncio
+        results: Dict[str, Any] = {
             "resume_id": resume_id,
             "stages_completed": [],
-            "errors": []
+            "errors": [],
         }
-        
+
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return _err("upload", f"Resume {resume_id} not found.")
+
+        resume.pipeline_status = "uploading"
+        resume.updated_at = datetime.utcnow()
+        self.db.commit()
+
         try:
-            # Stage 1: Parse Resume
-            parse_result = self.parse_resume(resume_id, file_path, user_id)
+            # 1. Parsing with timeout and robust error handling
+            logger.info(f"[Pipeline] Starting parsing for resume {resume_id}, file_path={file_path}")
+            try:
+                parse_result = await asyncio.wait_for(
+                    self.parse_resume(resume_id, file_path, user_id), timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"[Pipeline] Parsing timed out for resume {resume_id}, file_path={file_path}")
+                resume.pipeline_status = "failed"
+                resume.pipeline_error = "Parsing timed out."
+                resume.updated_at = datetime.utcnow()
+                self.db.commit()
+                results["errors"].append("Parsing timed out.")
+                results["success"] = False
+                return results
+            except Exception as exc:
+                logger.error(f"[Pipeline] Parsing crashed for resume {resume_id}, file_path={file_path}: {exc}")
+                resume.pipeline_status = "failed"
+                resume.pipeline_error = f"Parsing crashed: {exc}"
+                resume.updated_at = datetime.utcnow()
+                self.db.commit()
+                results["errors"].append(f"Parsing crashed: {exc}")
+                results["success"] = False
+                return results
+
             if parse_result.get("success"):
                 results["stages_completed"].append("parsing")
             else:
+                logger.error(f"[Pipeline] Parsing failed for resume {resume_id}: {parse_result.get('error')}")
+                resume.pipeline_status = "failed"
+                resume.pipeline_error = f"Parsing failed: {parse_result.get('error')}"
+                resume.updated_at = datetime.utcnow()
+                self.db.commit()
                 results["errors"].append(f"Parsing failed: {parse_result.get('error')}")
+                results["success"] = False
                 return results
-            
-            # Stage 2: Generate Embeddings
+
+            # 2. Embeddings
             embed_result = self.generate_resume_embeddings(resume_id, user_id)
             if embed_result.get("success"):
                 results["stages_completed"].append("embeddings")
             else:
+                logger.error(f"[Pipeline] Embedding failed for resume {resume_id}: {embed_result.get('error')}")
+                resume.pipeline_status = "failed"
+                resume.pipeline_error = f"Embedding failed: {embed_result.get('error')}"
+                resume.updated_at = datetime.utcnow()
+                self.db.commit()
                 results["errors"].append(f"Embedding failed: {embed_result.get('error')}")
-            
-            # Stage 3: Run ATS Analysis
+                results["success"] = False
+                return results
+
+            # 3. ATS Analysis
             ats_result = await self.run_ats_analysis(resume_id, user_id)
             if ats_result.get("success"):
                 results["stages_completed"].append("ats_analysis")
+                results["ats_score"] = ats_result.get("ats_score")
             else:
+                logger.error(f"[Pipeline] ATS analysis failed for resume {resume_id}: {ats_result.get('error')}")
                 results["errors"].append(f"ATS analysis failed: {ats_result.get('error')}")
-            
+
+            # 4. Job Matching
+            match_result = await self.match_jobs(resume_id, user_id)
+            if match_result.get("success"):
+                results["stages_completed"].append("matched")
+            else:
+                logger.error(f"[Pipeline] Job matching failed for resume {resume_id}: {match_result.get('error')}")
+                results["errors"].append(f"Job matching failed: {match_result.get('error')}")
+
             results["success"] = True
-            
-        except Exception as e:
-            logger.error(f"Pipeline error for resume {resume_id}: {e}")
-            results["errors"].append(str(e))
+            resume.pipeline_status = "completed"
+            resume.pipeline_error = None
+            resume.updated_at = datetime.utcnow()
+            self.db.commit()
+
+        except Exception as exc:
+            logger.exception("Pipeline error for resume %d", resume_id)
+            results["errors"].append(str(exc))
             results["success"] = False
-        
+            resume.pipeline_status = "failed"
+            resume.pipeline_error = str(exc)
+            resume.updated_at = datetime.utcnow()
+            self.db.commit()
+
         return results
-    
-    def parse_resume(
-        self,
-        resume_id: int,
-        file_path: str,
-        user_id: int
-    ) -> Dict[str, Any]:
-        """
-        Stage 1: Parse resume PDF and extract structured data.
-        
-        Args:
-            resume_id: ID of the resume
-            file_path: Path to the resume file
-            user_id: ID of the user
-            
-        Returns:
-            Parsing result
-        """
+
+    async def parse_resume(self, resume_id: int, file_path: str, user_id: int) -> Dict[str, Any]:
+        """Parses the resume file and updates the database."""
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return _err("parsing", f"Resume {resume_id} not found.")
+
         try:
-            # Resolve absolute path for local storage
-            full_path = file_path
-            from app.core.config import settings
-            if not full_path.startswith("http") and settings.STORAGE_PROVIDER == "local" and not os.path.isabs(full_path):
-                upload_dir = settings.UPLOAD_DIR
-                
-                # Candidate 1: Direct join with settings.UPLOAD_DIR (relative to CWD)
-                path1 = os.path.join(upload_dir, full_path)
-                
-                # Candidate 2: Absolute path via project root (Backend directory)
-                # dirname(__file__) is Backend/app/services/resume_service/
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                path2 = os.path.join(base_dir, upload_dir.lstrip("./"), full_path)
-                
-                # Candidate 3: Root project directory (if Backend is a subdirectory)
-                path3 = os.path.join(base_dir, "..", "uploads", full_path)
-                
-                if os.path.exists(path1):
-                    full_path = path1
-                elif os.path.exists(path2):
-                    full_path = path2
-                elif os.path.exists(path3):
-                    full_path = path3
-            
-            # Parse the resume file
+            resume.pipeline_status = "parsing"
+            self.db.commit()
+
+            full_path = self._resolve_file_path(file_path)
+            if full_path is None or not os.path.exists(full_path):
+                return _err("parsing", f"File not found: '{file_path}'")
+
+            # Note: Using sync parse_resume_file here for simplicity as it was imported so
             parsed_data = parse_resume_file(full_path)
-            
-            # Get or create resume content
-            resume = self.db.query(Resume).filter(
-                Resume.id == resume_id,
-                Resume.user_id == user_id
-            ).first()
-            
-            if not resume:
-                return {"success": False, "error": "Resume not found"}
-            
-            # Check if content already exists
-            content = self.db.query(ResumeContent).filter(
-                ResumeContent.resume_id == resume_id
-            ).first()
-            
-            if not content:
-                content = ResumeContent(resume_id=resume_id)
-                self.db.add(content)
-            
-            # Update content with parsed data
-            content.full_name_encrypted = encrypt(parsed_data.get("full_name", ""))
-            content.email_encrypted = encrypt(parsed_data.get("email", ""))
-            content.phone_encrypted = encrypt(parsed_data.get("phone", ""))
-            content.linkedin_url_encrypted = encrypt(parsed_data.get("linkedin_url", ""))
-            content.raw_text = parsed_data.get("raw_text", "")
-            content.parsed_json = parsed_data
-            content.parsed_at = datetime.now().isoformat()
-            content.updated_at = datetime.now().isoformat()
-            
-            # Update resume main fields for preview
+            if not parsed_data:
+                return _err("parsing", "Parsed data is empty.")
+
+            self.db.commit()
+
+            # Update resume fields
+            resume.parsed_data = json.dumps(parsed_data)
             resume.full_name = encrypt(parsed_data.get("full_name", ""))
             resume.email = encrypt(parsed_data.get("email", ""))
             resume.phone = encrypt(parsed_data.get("phone", ""))
             resume.linkedin_url = encrypt(parsed_data.get("linkedin_url", ""))
-            resume.parsed_data = json.dumps(parsed_data)
+
+            # Update ResumeContent with raw text
+            if not resume.content:
+                resume.content = ResumeContent(resume_id=resume.id)
+            resume.content.raw_text = parsed_data.get("raw_text", "")
+            # Ensure it's stored as a JSON-serializable dict if needed, 
+            # though ResumeContent.parsed_json is Column(JSON)
+            resume.content.parsed_json = parsed_data
             
-            # Populate nested tables
+            # Update nested data (Education, Experience, etc.)
             self._update_nested_data(resume, parsed_data)
-            
-            # Update resume status
-            resume.status = "parsed"
-            resume.updated_at = datetime.utcnow()
-            
+
+            resume.pipeline_status = "parsed"
             self.db.commit()
-            
-            logger.info(f"Successfully parsed resume {resume_id}")
-            
-            return {
-                "success": True,
-                "parsed_data": parsed_data
-            }
-            
-        except Exception as e:
-            logger.error(f"Error parsing resume {resume_id}: {e}")
-            self.db.rollback()
-            return {"success": False, "error": str(e)}
-    
-    def generate_resume_embeddings(
-        self,
-        resume_id: int,
-        user_id: int
-    ) -> Dict[str, Any]:
-        """
-        Stage 2: Generate vector embeddings for semantic search.
-        
-        Args:
-            resume_id: ID of the resume
-            user_id: ID of the user
-            
-        Returns:
-            Embedding result
-        """
+            return _ok("parsing", parsed_data=parsed_data)
+
+        except Exception as exc:
+            logger.exception("Parsing error for resume %d", resume_id)
+            resume.pipeline_status = "failed"
+            resume.pipeline_error = f"Parsing error: {str(exc)}"
+            self.db.commit()
+            return _err("parsing", str(exc))
+
+    def generate_resume_embeddings(self, resume_id: int, user_id: int) -> Dict[str, Any]:
+        """Generates semantic embeddings for the resume."""
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return _err("embeddings", f"Resume {resume_id} not found.")
+
         try:
-            # Get resume content
-            resume = self.db.query(Resume).filter(
-                Resume.id == resume_id,
-                Resume.user_id == user_id
-            ).first()
-            
-            if not resume:
-                return {"success": False, "error": "Resume not found"}
-            
-            content = self.db.query(ResumeContent).filter(
-                ResumeContent.resume_id == resume_id
-            ).first()
-            
-            if not content:
-                return {"success": False, "error": "Resume not parsed yet"}
-            
-            # Build resume text for embedding
-            resume_text = self._build_resume_text(resume, content)
-            
-            # Generate embeddings using LLM service
-            embeddings = llm_service.generate_embeddings(resume_text)
-            
-            if not embeddings:
-                return {"success": False, "error": "Failed to generate embeddings"}
-            
-            embedding = embeddings[0]
-            
-            # Store or update embedding
-            existing = self.db.query(ResumeEmbedding).filter(
+            resume.pipeline_status = "embedding"
+            self.db.commit()
+
+            parsed_data = {}
+            if resume.parsed_data:
+                parsed_data = json.loads(resume.parsed_data)
+
+            # ✅ FIX: Always include raw_text fallback
+            sections = []
+
+            if parsed_data.get("raw_text"):
+                sections.append(parsed_data["raw_text"])
+
+            if parsed_data.get("summary"):
+                sections.append(parsed_data["summary"])
+
+            if parsed_data.get("experience"):
+                for exp in parsed_data["experience"]:
+                    sections.append(
+                        f"{exp.get('role')} at {exp.get('company')}: {exp.get('description')}"
+                    )
+
+            if parsed_data.get("skills"):
+                sections.append(
+                    "Skills: " + ", ".join([
+                        s.get("name") if isinstance(s, dict) else str(s)
+                        for s in parsed_data["skills"]
+                    ])
+                )
+
+            holistic_text = "\n".join(sections)
+
+            # ❌ STOP EMPTY TEXT BUG
+            if not holistic_text.strip():
+                logger.error("[Embedding] Empty text")
+                return _err("embeddings", "No content to embed")
+
+            logger.info(f"[Embedding] Text length: {len(holistic_text)}")
+
+            emb_service = get_embedding_service()
+            vector = emb_service.get_embedding(holistic_text)
+
+            if not vector:
+                logger.error("[Embedding] Failed to generate vector")
+                return _err("embeddings", "Embedding failed")
+
+            # ✅ UPSERT embedding
+            embedding_obj = self.db.query(ResumeEmbedding).filter(
                 ResumeEmbedding.resume_id == resume_id
             ).first()
-            
-            if not existing:
-                existing = ResumeEmbedding(resume_id=resume_id)
-                self.db.add(existing)
-            
-            existing.embedding_vector = embedding.embedding
-            existing.model_name = embedding.model
-            existing.updated_at = datetime.now().isoformat()
-            
+
+            if not embedding_obj:
+                embedding_obj = ResumeEmbedding(resume_id=resume_id)
+                self.db.add(embedding_obj)
+
+            embedding_obj.embedding_vector = vector
+            embedding_obj.model_name = emb_service.model_name
+            embedding_obj.updated_at = datetime.utcnow()
+
+            resume.pipeline_status = "embedded"
             self.db.commit()
-            
-            logger.info(f"Successfully generated embeddings for resume {resume_id}")
-            
-            return {
-                "success": True,
-                "model": embedding.model
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating embeddings for resume {resume_id}: {e}")
-            self.db.rollback()
-            return {"success": False, "error": str(e)}
-    
-    async def run_ats_analysis(
-        self,
-        resume_id: int,
-        user_id: int,
-        job_description: str = ""
-    ) -> Dict[str, Any]:
-        """
-        Stage 3: Run ATS analysis on parsed resume.
-        
-        Args:
-            resume_id: ID of the resume
-            user_id: ID of the user
-            job_description: Optional job description for matching
-            
-        Returns:
-            ATS analysis result
-        """
-        try:
-            # Get resume with relationships
-            resume = self.db.query(Resume).filter(
-                Resume.id == resume_id,
-                Resume.user_id == user_id
-            ).first()
-            
-            if not resume:
-                return {"success": False, "error": "Resume not found"}
-            
-            # Decrypt content for analysis
-            content = self.db.query(ResumeContent).filter(
-                ResumeContent.resume_id == resume_id
-            ).first()
-            
-            if not content:
-                return {"success": False, "error": "Resume not parsed yet"}
-            
-            # Build resume object for ATS analyzer
-            resume_for_ats = self._build_resume_for_ats(resume, content)
-            
-            # Calculate ATS score
-            ats_result = await calculate_ats(resume_for_ats, job_description=job_description)
-            
-            # Prepare feedback dictionary including new metrics
-            feedback_dict = {
-                "category_scores": ats_result.get("category_scores", {}),
-                "skill_analysis": ats_result.get("skill_analysis", {}),
-                "keyword_gap": ats_result.get("keyword_gap", {}),
-                "industry_tips": ats_result.get("industry_tips", []),
-                "llm_powered": ats_result.get("llm_powered", False)
-            }
-            
-            # Store analysis result
-            analysis = ResumeAnalysis(
-                resume_id=resume_id,
-                analysis_type="ats",
-                score=ats_result.get("overall_score"),
-                feedback=json.dumps(feedback_dict),
-                missing_keywords=json.dumps(ats_result.get("issues", [])),
-                suggestions=json.dumps(ats_result.get("recommendations", [])),
-                job_description=job_description if job_description else None
-            )
-            
-            self.db.add(analysis)
-            
-            # Update resume with score
-            resume.ats_score = ats_result.get("overall_score")
-            resume.analysis_score = ats_result.get("overall_score")
-            resume.status = "analyzed"
-            resume.updated_at = datetime.utcnow()
-            
+
+            return _ok("embeddings")
+
+        except Exception as exc:
+            logger.exception("Embedding error for resume %d", resume_id)
+            resume.pipeline_status = "failed"
+            resume.pipeline_error = f"Embedding error: {str(exc)}"
             self.db.commit()
-            
-            logger.info(f"Successfully ran ATS analysis for resume {resume_id}")
-            
-            return {
-                "success": True,
-                "ats_score": ats_result.get("overall_score")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error running ATS analysis for resume {resume_id}: {e}")
-            self.db.rollback()
-            return {"success": False, "error": str(e)}
-    
-    async def optimize_resume(
-        self,
-        resume_id: int,
-        user_id: int,
-        job_description: str = ""
-    ) -> Dict[str, Any]:
-        """
-        Stage 4: AI-powered resume optimization.
-        
-        Args:
-            resume_id: ID of the resume
-            user_id: ID of the user
-            job_description: Optional job description for tailoring
-            
-        Returns:
-            Optimization result
-        """
+            return _err("embeddings", str(exc))
+
+    async def run_ats_analysis(self, resume_id: int, user_id: int) -> Dict[str, Any]:
+        """Runs ATS analysis and scores the resume."""
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return _err("analyzing", f"Resume {resume_id} not found.")
+
         try:
-            # Use the specialized ResumeOptimizer for Stage 4
-            optimizer = ResumeOptimizer(self.db)
-            result = await optimizer.optimize_resume(
-                resume_id=resume_id,
-                user_id=user_id,
-                job_description=job_description,
-                optimization_type="comprehensive"
-            )
+            resume.pipeline_status = "analyzing"
+            self.db.commit()
+
+            # Use calculate_ats_score (aliased as calculate_ats)
+            ats_result = await calculate_ats(resume)
             
-            if not result.get("success"):
-                return {"success": False, "error": result.get("error")}
-            
-            # Update resume status to optimized
-            resume = self.db.query(Resume).filter(Resume.id == resume_id).first()
-            if resume:
-                resume.status = "optimized"
-                self.db.commit()
-            
-            logger.info(f"Successfully optimized resume {resume_id} through pipeline")
-            
-            return {
-                "success": True,
-                "optimization": result.get("optimized_resume"),
-                "suggestions": result.get("suggestions"),
-                "ats_score": result.get("ats_score")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in pipeline resume optimization {resume_id}: {e}")
-            self.db.rollback()
-            return {"success": False, "error": str(e)}
-    
-    def match_jobs(
-        self,
-        resume_id: int,
-        user_id: int,
-        limit: int = 10
-    ) -> Dict[str, Any]:
-        """
-        Stage 5: Match resume to jobs using vector similarity.
-        
-        Args:
-            resume_id: ID of the resume
-            user_id: ID of the user
-            limit: Maximum number of job matches
-            
-        Returns:
-            Job matching results
-        """
-        from app.services.job_service.job_matcher import JobMatcher
-        
-        try:
-            matcher = JobMatcher(self.db)
-            matches = matcher.match_resume_to_jobs(resume_id, user_id, limit)
-            
-            return {
-                "success": True,
-                "matches": matches,
-                "count": len(matches)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error matching jobs for resume {resume_id}: {e}")
-            return {"success": False, "error": str(e)}
-    
-    # ==================== Helper Methods ====================
-    
-    def _build_resume_text(self, resume: Resume, content: ResumeContent) -> str:
-        """Build text representation of resume for embedding."""
-        parts = []
-        
-        # Contact info
-        full_name = decrypt(content.full_name_encrypted) if content.full_name_encrypted else ""
-        if full_name:
-            parts.append(f"Name: {full_name}")
-        
-        email = decrypt(content.email_encrypted) if content.email_encrypted else ""
-        if email:
-            parts.append(f"Email: {email}")
-        
-        # Skills
-        if content.skills_list:
-            parts.append(f"Skills: {', '.join(content.skills_list)}")
-        
-        # Experience
-        for exp in resume.experience:
-            parts.append(f"Role: {exp.role} at {exp.company}. {exp.description or ''}")
-        
-        # Education
-        for edu in resume.education:
-            parts.append(f"Education: {edu.degree} from {edu.school}")
-        
-        # Projects
-        for proj in resume.projects:
-            parts.append(f"Project: {proj.project_name}. {proj.description or ''}")
-        
-        return "\n".join(parts)
-    
-    def _build_resume_for_ats(self, resume: Resume, content: ResumeContent) -> Any:
-        """Build resume object compatible with ATS analyzer."""
-        # Extract summary from parsed_json
-        summary = ""
-        if content.parsed_json and isinstance(content.parsed_json, dict):
-            summary = content.parsed_json.get("summary", "")
-        elif resume.parsed_data:
-            try:
-                pd = json.loads(resume.parsed_data)
-                summary = pd.get("summary", "")
-            except:
-                pass
+            if ats_result:
+                resume.ats_score = ats_result.get("overall_score")
+                resume.analysis_score = ats_result.get("overall_score")
                 
-        # Create a simple object with required attributes
-        class ResumeForATS:
-            def __init__(self, resume, content, summary):
-                self.full_name = decrypt(content.full_name_encrypted) if content.full_name_encrypted else ""
-                self.email = decrypt(content.email_encrypted) if content.email_encrypted else ""
-                self.phone = decrypt(content.phone_encrypted) if content.phone_encrypted else ""
-                self.linkedin_url = decrypt(content.linkedin_url_encrypted) if content.linkedin_url_encrypted else ""
-                self.title = resume.title
-                self.target_role = resume.target_role
-                self.summary = summary
-                self.education = resume.education
-                self.experience = resume.experience
-                self.projects = resume.projects
-                self.skills = resume.skills
+                # Save as ResumeAnalysis record
+                analysis = ResumeAnalysis(
+                    resume_id=resume_id,
+                    analysis_type="ats",
+                    score=ats_result.get("overall_score"),
+                    feedback=json.dumps(ats_result.get("category_scores", {})),
+                    issues=json.dumps(ats_result.get("issues", [])),
+                    suggestions=json.dumps(ats_result.get("recommendations", [])),
+                    created_at=datetime.utcnow()
+                )
+                self.db.add(analysis)
+                
+                resume.pipeline_status = "analyzed"
+                self.db.commit()
+                return _ok("analyzing", ats_score=resume.ats_score)
+            else:
+                return _err("analyzing", "ATS analysis returned no results.")
+
+        except Exception as exc:
+            logger.exception("ATS analysis error for resume %d", resume_id)
+            resume.pipeline_status = "failed"
+            resume.pipeline_error = f"Analysis error: {str(exc)}"
+            self.db.commit()
+            return _err("analyzing", str(exc))
+
+    async def match_jobs(self, resume_id: int, user_id: int) -> Dict[str, Any]:
+        """Matches the resume against available jobs."""
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return _err("matching", f"Resume {resume_id} not found.")
+
+        try:
+            resume.pipeline_status = "matching"
+            self.db.commit()
+
+            matcher = JobMatcher(self.db)
+            # Run matching
+            matches = await matcher.match_resume_to_jobs(resume_id, user_id, limit=5)
+            
+            resume.pipeline_status = "completed"
+            self.db.commit()
+            return _ok("matching", match_count=len(matches))
+
+        except Exception as exc:
+            logger.exception("Matching error for resume %d", resume_id)
+            resume.pipeline_status = "failed"
+            resume.pipeline_error = f"Matching error: {str(exc)}"
+            self.db.commit()
+            return _err("matching", str(exc))
+
+    def get_pipeline_status(self, resume_id: int, user_id: int) -> Dict[str, Any]:
+        """Returns the current status of the resume pipeline."""
+        resume = self._get_resume(resume_id, user_id)
+        if not resume:
+            return {"error": f"Resume {resume_id} not found"}
+
+        status_map = {
+            "pending": 0,
+            "uploading": 10,
+            "parsing": 20,
+            "parsed": 40,
+            "embedding": 50,
+            "embedded": 60,
+            "analyzing": 70,
+            "analyzed": 80,
+            "matching": 90,
+            "completed": 100,
+            "failed": 0
+        }
+
+        current_status = resume.pipeline_status or "pending"
+        progress = status_map.get(current_status, 0)
+
+        return {
+            "resume_id": resume_id,
+            "current_status": current_status,
+            "progress": progress,
+            "error": resume.pipeline_error,
+            "updated_at": resume.updated_at.isoformat() if resume.updated_at else None
+        }
+
+    def _get_resume(self, resume_id: int, user_id: int) -> Optional[Resume]:
+        return self.db.query(Resume).filter(Resume.id == resume_id, Resume.user_id == user_id).first()
+
+    def _resolve_file_path(self, file_path: str) -> Optional[str]:
+        """Resolves relative file path to absolute path for local storage."""
+        if not file_path:
+            return None
+            
+        if os.path.isabs(file_path):
+            return file_path if os.path.exists(file_path) else None
         
-        return ResumeForATS(resume, content, summary)
-    
-    def _build_optimization_prompt(
-        self,
-        resume: Resume,
-        content: ResumeContent,
-        job_description: str
-    ) -> str:
-        """Build prompt for resume optimization."""
-        prompt = f"""Analyze and optimize this resume.
+        # 1. Try relative to settings.UPLOAD_DIR (standard for LocalStorageService)
+        path1 = os.path.join(settings.UPLOAD_DIR, file_path)
+        if os.path.exists(path1):
+            return os.path.abspath(path1)
+            
+        # 2. Try Backend/uploads if Backend is a subdirectory
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        path2 = os.path.join(project_root, "uploads", file_path)
+        if os.path.exists(path2):
+            return os.path.abspath(path2)
+            
+        # 3. Try relative to current working directory
+        if os.path.exists(file_path):
+            return os.path.abspath(file_path)
+            
+        logger.error(f"Could not resolve file path: {file_path}. Tried: {path1}, {path2}")
+        return None
 
-Resume:
-{decrypt(content.raw_text) if content.raw_text else ''}
-
-Skills: {', '.join([s.name for s in resume.skills])}
-Experience: {len(resume.experience)} positions
-Education: {len(resume.education)} entries
-
-"""
-        if job_description:
-            prompt += f"""
-Target Job Description:
-{job_description}
-
-Tailor the resume to better match this job.
-"""
-        
-        prompt += """
-Provide:
-1. An improved professional summary
-2. Key skills that should be highlighted
-3. Specific suggestions for improvement
-"""
-        return prompt
-    
-    def _get_next_version_number(self, resume_id: int) -> int:
-        """Get next version number for a resume."""
-        latest = self.db.query(ResumeVersion).filter(
-            ResumeVersion.resume_id == resume_id
-        ).order_by(ResumeVersion.version_number.desc()).first()
-        
-        return (latest.version_number + 1) if latest else 1
-    
     def _update_nested_data(self, resume: Resume, data: Dict[str, Any]):
-        """Update nested data (education, experience, etc.) for a resume."""
+        """Helper to update structured sections of the resume."""
+
         # Clear existing
         self.db.query(Education).filter(Education.resume_id == resume.id).delete()
         self.db.query(Experience).filter(Experience.resume_id == resume.id).delete()
         self.db.query(Project).filter(Project.resume_id == resume.id).delete()
-        self.db.query(Skill).filter(Skill.resume_id == resume.id).delete()
-        
+
         # Education
         for edu_data in data.get("education", []):
             edu = Education(
@@ -559,104 +412,67 @@ Provide:
                 degree=edu_data.get("degree", ""),
                 major=edu_data.get("major"),
                 gpa=edu_data.get("gpa"),
-                start_date=edu_data.get("start_date", ""),
-                end_date=edu_data.get("end_date", ""),
+                start_date=edu_data.get("start_date") or edu_data.get("year", ""),
+                end_date=edu_data.get("end_date") or edu_data.get("year", ""),
                 description=edu_data.get("description")
             )
             self.db.add(edu)
-        
+
         # Experience
         for exp_data in data.get("experience", []):
-            description = exp_data.get("description")
-            if not description and exp_data.get("points"):
-                description = "\n".join(exp_data.get("points", []))
-            
             exp = Experience(
                 resume_id=resume.id,
                 company=exp_data.get("company", ""),
                 role=exp_data.get("role", ""),
                 location=exp_data.get("location"),
-                start_date=exp_data.get("start_date", ""),
-                end_date=exp_data.get("end_date"),
+                start_date=exp_data.get("start_date") or (
+                    exp_data.get("duration", "").split(" - ")[0]
+                    if exp_data.get("duration") else ""
+                ),
+                end_date=exp_data.get("end_date") or (
+                    exp_data.get("duration", "").split(" - ")[1]
+                    if exp_data.get("duration") and " - " in exp_data.get("duration") else None
+                ),
                 current=exp_data.get("current", False),
-                description=description
+                description=exp_data.get("description") or exp_data.get("desc")
             )
             self.db.add(exp)
-        
+
         # Projects
         for proj_data in data.get("projects", []):
-            description = proj_data.get("description")
-            if not description and proj_data.get("points"):
-                description = "\n".join(proj_data.get("points", []))
-            
-            technologies = proj_data.get("technologies")
-            if isinstance(technologies, list):
-                technologies = ", ".join(technologies)
-            
             proj = Project(
                 resume_id=resume.id,
                 project_name=proj_data.get("project_name", ""),
-                description=description,
+                description=proj_data.get("description") or proj_data.get("desc"),
                 project_url=proj_data.get("project_url"),
                 github_url=proj_data.get("github_url"),
-                technologies=technologies
+                technologies=proj_data.get("technologies"),
+                points=proj_data.get("points", [])
             )
             self.db.add(proj)
-        
-        # Skills
-        for skill_data in data.get("skills", []):
-            skill = Skill(
-                resume_id=resume.id,
-                name=skill_data.get("name", ""),
-                category=skill_data.get("category", "Technical")
-            )
-            self.db.add(skill)
-        
-        self.db.commit()
-    
-    # ==================== Pipeline Status ====================
-    
-    def get_pipeline_status(self, resume_id: int, user_id: int) -> Dict[str, Any]:
-        """Get current status of pipeline for a resume."""
-        resume = self.db.query(Resume).filter(
-            Resume.id == resume_id,
-            Resume.user_id == user_id
-        ).first()
-        
-        if not resume:
-            return {"error": "Resume not found"}
-        
-        status = {
-            "resume_id": resume_id,
-            "current_status": resume.status,
-            "stages": {
-                "uploaded": True,
-                "parsed": resume.status in ["parsed", "analyzed", "optimized"],
-                "embedded": self._has_embeddings(resume_id),
-                "analyzed": self._has_analysis(resume_id),
-                "optimized": self._has_optimization(resume_id)
-            }
-        }
-        
-        return status
-    
-    def _has_embeddings(self, resume_id: int) -> bool:
-        """Check if resume has embeddings."""
-        return self.db.query(ResumeEmbedding).filter(
-            ResumeEmbedding.resume_id == resume_id
-        ).first() is not None
-    
-    def _has_analysis(self, resume_id: int) -> bool:
-        """Check if resume has ATS analysis."""
-        return self.db.query(ResumeAnalysis).filter(
-            ResumeAnalysis.resume_id == resume_id,
-            ResumeAnalysis.analysis_type == "ats"
-        ).first() is not None
-    
-    def _has_optimization(self, resume_id: int) -> bool:
-        """Check if resume has optimized version."""
-        return self.db.query(ResumeVersion).filter(
-            ResumeVersion.resume_id == resume_id,
-            ResumeVersion.version_type == "optimized"
-        ).first() is not None
 
+        # ✅ Skills (FIXED PROPERLY)
+        for skill_data in data.get("skills", []):
+            name = skill_data.get("name") if isinstance(skill_data, dict) else str(skill_data)
+            category = skill_data.get("category", "Technical") if isinstance(skill_data, dict) else "Technical"
+
+            if not name:
+                continue
+
+            name = name.strip()
+
+            # 🔥 IMPORTANT: Check globally
+            existing_skill = self.db.query(Skill).filter(Skill.name == name).first()
+
+            if existing_skill:
+                continue
+
+            new_skill = Skill(
+                resume_id=resume.id,
+                name=name,
+                category=category
+            )
+            self.db.add(new_skill)
+
+        # ✅ single commit
+        self.db.commit()

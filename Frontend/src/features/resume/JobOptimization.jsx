@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { resumeAPI } from "../../services/api";
+import { normalizeResumePayload } from "../../utils/normalizeResumePayload";
 
 const JobOptimization = () => {
   const { resumeId } = useParams();
@@ -27,6 +28,7 @@ const JobOptimization = () => {
   const [jobDescription, setJobDescription] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [applyingOptimization, setApplyingOptimization] = useState(false);
   const [error, setError] = useState(null);
   const resultsRef = useRef(null);
 
@@ -46,21 +48,29 @@ const JobOptimization = () => {
   }, [fetchResume]);
 
   const handleAnalyze = async () => {
-    if (!jobDescription.trim()) return;
+    if (!jobDescription.trim()) {
+      setError("Please provide a job description for tailored optimization.");
+      return;
+    }
+    // Guard: warn if resume pipeline hasn't completed
+    if (resume?.pipeline_status && !["completed", "analyzed"].includes(resume.pipeline_status)) {
+      setError(`Resume is still processing (status: ${resume.pipeline_status}). Please wait and try again.`);
+      return;
+    }
     setAnalyzing(true);
     setError(null);
     try {
       // Calling the backend optimize endpoint
       const response = await resumeAPI.optimizeResume(
         resumeId,
-        "job-specific",
+        "job_tailored",
         jobDescription,
         null,
-        false
+        false,
       );
-      
+
       const result = response.data;
-      
+
       if (result.success) {
         setAnalysisResult({
           selectionChance: result.compatibility_score || 0,
@@ -68,7 +78,13 @@ const JobOptimization = () => {
           matchingSkills: result.matching_skills || [],
           skillRecommendations: result.skill_recommendations || [],
           certificateRecommendations: result.certificate_recommendations || [],
-          comparison: result.compatibility_feedback || result.suggestions || "No detailed comparison available."
+          comparison:
+            result.compatibility_feedback ||
+            result.suggestions ||
+            "No detailed comparison available.",
+          optimizedResume: result.optimized_resume || null,
+          suggestions: result.suggestions || "",
+          improvements: result.improvements || [],
         });
 
         // Smooth scroll to results
@@ -76,14 +92,50 @@ const JobOptimization = () => {
           resultsRef.current?.scrollIntoView({ behavior: "smooth" });
         }, 100);
       } else {
+        // Use the structured error from backend if available
         setError(result.error || "Analysis failed. Please try again.");
       }
 
     } catch (err) {
       console.error("Analysis failed:", err);
-      setError("Failed to connect to the analysis service. Please check your connection.");
+      // Try to extract backend error message first, then fallback
+      const backendError = err.response?.data?.error || err.response?.data?.detail;
+      setError(backendError || "Failed to connect to the analysis service. Please check your connection.");
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleApplyOptimization = async () => {
+    if (!analysisResult?.optimizedResume) return;
+
+    setApplyingOptimization(true);
+    setError(null);
+
+    try {
+      // Save the optimized resume as a new version
+      const optimizedData = analysisResult.optimizedResume;
+
+      // Normalize the payload to match backend schema exactly
+      // This handles inconsistent AI response formats and ensures data integrity
+      const normalizedPayload = normalizeResumePayload(optimizedData);
+
+      console.debug('[handleApplyOptimization] Sending normalized payload:', normalizedPayload);
+
+      // Update the resume with optimized content
+      const response = await resumeAPI.updateResume(resumeId, normalizedPayload);
+
+      if (response.data) {
+        // Refresh the resume data
+        await fetchResume();
+        // Navigate to the updated resume
+        navigate(`/app/resumes/${resumeId}`);
+      }
+    } catch (err) {
+      console.error("Failed to apply optimization:", err);
+      setError("Failed to apply optimization. Please try again.");
+    } finally {
+      setApplyingOptimization(false);
     }
   };
 
@@ -107,7 +159,9 @@ const JobOptimization = () => {
         </button>
         <div>
           <h1 className="text-3xl font-bold text-white">Job Optimisation</h1>
-          <p className="text-slate-400">Compare your resume with a specific job description</p>
+          <p className="text-slate-400">
+            Compare your resume with a specific job description
+          </p>
         </div>
       </div>
 
@@ -123,41 +177,69 @@ const JobOptimization = () => {
             {resume ? (
               <div className="space-y-6 text-sm">
                 <div className="text-center border-b pb-4">
-                  <h2 className="text-2xl font-bold uppercase">{resume.parsed_data?.full_name || resume.full_name || resume.filename}</h2>
-                  <p className="text-slate-600 font-medium">{resume.parsed_data?.title || resume.title}</p>
+                  <h2 className="text-2xl font-bold uppercase">
+                    {resume.parsed_data?.full_name ||
+                      resume.full_name ||
+                      resume.filename}
+                  </h2>
+                  <p className="text-slate-600 font-medium">
+                    {resume.parsed_data?.title || resume.title}
+                  </p>
                 </div>
-                
+
                 {(resume.parsed_data?.summary || resume.summary) && (
                   <div>
-                    <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Professional Summary</h3>
-                    <p className="leading-relaxed">{resume.parsed_data?.summary || resume.summary}</p>
+                    <h3 className="font-bold border-b mb-2 uppercase tracking-wide">
+                      Professional Summary
+                    </h3>
+                    <p className="leading-relaxed">
+                      {resume.parsed_data?.summary || resume.summary}
+                    </p>
                   </div>
                 )}
 
                 <div>
-                  <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Experience</h3>
+                  <h3 className="font-bold border-b mb-2 uppercase tracking-wide">
+                    Experience
+                  </h3>
                   <div className="space-y-4">
-                    {(resume.parsed_data?.experience || resume.experience || []).map((exp, i) => (
+                    {(
+                      resume.parsed_data?.experience ||
+                      resume.experience ||
+                      []
+                    ).map((exp, i) => (
                       <div key={i}>
                         <div className="flex justify-between font-bold">
                           <span>{exp.role}</span>
-                          <span className="text-slate-500 text-xs">{exp.duration || (exp.start_date + " - " + exp.end_date)}</span>
+                          <span className="text-slate-500 text-xs">
+                            {exp.duration ||
+                              exp.start_date + " - " + exp.end_date}
+                          </span>
                         </div>
                         <p className="text-slate-700 italic">{exp.company}</p>
-                        <p className="mt-1 text-xs">{exp.description || exp.desc}</p>
+                        <p className="mt-1 text-xs">
+                          {exp.description || exp.desc}
+                        </p>
                       </div>
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="font-bold border-b mb-2 uppercase tracking-wide">Skills</h3>
+                  <h3 className="font-bold border-b mb-2 uppercase tracking-wide">
+                    Skills
+                  </h3>
                   <div className="flex flex-wrap gap-2">
-                    {(resume.parsed_data?.skills || resume.skills || []).map((skill, i) => (
-                      <span key={i} className="px-2 py-1 bg-slate-100 rounded border text-xs">
-                        {typeof skill === 'string' ? skill : skill.name}
-                      </span>
-                    ))}
+                    {(resume.parsed_data?.skills || resume.skills || []).map(
+                      (skill, i) => (
+                        <span
+                          key={i}
+                          className="px-2 py-1 bg-slate-100 rounded border text-xs"
+                        >
+                          {typeof skill === "string" ? skill : skill.name}
+                        </span>
+                      ),
+                    )}
                   </div>
                 </div>
               </div>
@@ -188,7 +270,7 @@ const JobOptimization = () => {
                 className="flex-1 w-full bg-slate-900/50 border border-white/10 rounded-2xl p-4 text-sm text-white focus:ring-1 focus:ring-green-500/30 outline-none resize-none transition-all leading-relaxed"
               />
             </div>
-            
+
             <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl space-y-2">
               <p className="text-xs text-blue-400 font-bold flex items-center gap-2">
                 <Upload size={14} /> Quick Tips
@@ -201,7 +283,7 @@ const JobOptimization = () => {
             </div>
 
             {error && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-center gap-3 text-rose-400 text-sm"
@@ -223,7 +305,10 @@ const JobOptimization = () => {
                 </>
               ) : (
                 <>
-                  <Sparkles size={20} className="group-hover:scale-125 transition-transform" />
+                  <Sparkles
+                    size={20}
+                    className="group-hover:scale-125 transition-transform"
+                  />
                   <span>Analyse</span>
                 </>
               )}
@@ -244,15 +329,20 @@ const JobOptimization = () => {
             className="space-y-8 pt-8"
           >
             <div className="text-center space-y-2">
-              <h2 className="text-4xl font-black text-white">Analysis Results</h2>
-              <p className="text-slate-400">Here's how your resume stacks up against the job</p>
+              <h2 className="text-4xl font-black text-white">
+                Analysis Results
+              </h2>
+              <p className="text-slate-400">
+                Here's how your resume stacks up against the job
+              </p>
             </div>
 
             <div className="flex flex-col gap-8">
               {/* 1. Optimisation Recommendation */}
               <div className="card-glass p-8 space-y-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <BarChart3 className="text-indigo-400" size={20} /> Optimisation Recommendation
+                  <BarChart3 className="text-indigo-400" size={20} />{" "}
+                  Optimisation Recommendation
                 </h3>
                 <div className="p-6 bg-slate-900/50 rounded-2xl border border-white/5">
                   <p className="text-slate-300 leading-relaxed text-sm italic">
@@ -261,14 +351,31 @@ const JobOptimization = () => {
                 </div>
               </div>
 
-              {/* 2. Button to "optimise my resume" */}
-              <div className="flex justify-center">
-                 <button 
-                   onClick={() => navigate(`/app/resumes/${resumeId}/edit`)}
-                   className="w-full md:w-auto px-12 py-4 bg-white text-slate-900 font-black rounded-2xl hover:bg-slate-100 transition-all flex items-center justify-center gap-2 shadow-xl shadow-white/5"
-                 >
-                   <Edit3 size={20} /> Optimise my resume
-                 </button>
+              {/* 2. Buttons to apply or edit optimization */}
+              <div className="flex flex-col sm:flex-row justify-center gap-4">
+                <button
+                  onClick={handleApplyOptimization}
+                  disabled={applyingOptimization}
+                  className="w-full sm:w-auto px-12 py-4 bg-linear-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-black rounded-2xl shadow-xl shadow-green-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {applyingOptimization ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" />
+                      <span>Applying...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={20} />
+                      <span>Apply Optimization</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => navigate(`/app/resumes/${resumeId}/edit`)}
+                  className="w-full sm:w-auto px-12 py-4 bg-white/10 text-white font-bold rounded-2xl hover:bg-white/20 transition-all flex items-center justify-center gap-2 border border-white/20"
+                >
+                  <Edit3 size={20} /> Review & Edit
+                </button>
               </div>
 
               {/* 3. Skill Gap Analysis & 4. Selection Chance */}
@@ -276,7 +383,8 @@ const JobOptimization = () => {
                 <div className="md:col-span-3 card-glass p-8 space-y-6">
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Zap className="text-amber-400" size={20} /> Skill Gap Analysis
+                      <Zap className="text-amber-400" size={20} /> Skill Gap
+                      Analysis
                     </h3>
                     <span className="px-3 py-1 bg-amber-500/10 text-amber-400 text-[10px] font-black uppercase rounded-full border border-amber-500/20">
                       High Impact
@@ -285,20 +393,30 @@ const JobOptimization = () => {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
-                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Matching Skills</p>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                        Matching Skills
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         {analysisResult.matchingSkills.map((skill, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-green-500/10 text-green-400 text-xs font-medium rounded-lg border border-green-500/20 flex items-center gap-2">
+                          <span
+                            key={i}
+                            className="px-3 py-1.5 bg-green-500/10 text-green-400 text-xs font-medium rounded-lg border border-green-500/20 flex items-center gap-2"
+                          >
                             <CheckCircle2 size={12} /> {skill}
                           </span>
                         ))}
                       </div>
                     </div>
                     <div className="space-y-4">
-                      <p className="text-xs font-bold text-rose-400 uppercase tracking-widest">Missing Skills</p>
+                      <p className="text-xs font-bold text-rose-400 uppercase tracking-widest">
+                        Missing Skills
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         {analysisResult.skillGap.map((skill, i) => (
-                          <span key={i} className="px-3 py-1.5 bg-rose-500/10 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/20 flex items-center gap-2">
+                          <span
+                            key={i}
+                            className="px-3 py-1.5 bg-rose-500/10 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/20 flex items-center gap-2"
+                          >
                             <AlertCircle size={12} /> {skill}
                           </span>
                         ))}
@@ -309,53 +427,80 @@ const JobOptimization = () => {
 
                 <div className="card-glass p-6 flex flex-col items-center justify-center text-center space-y-3 border-blue-500/20">
                   <div className="w-20 h-20 rounded-full border-4 border-blue-500/20 flex items-center justify-center relative">
-                     <div 
-                       className="absolute inset-0 rounded-full border-4 border-blue-500" 
-                       style={{ clipPath: `inset(${100 - analysisResult.selectionChance}% 0 0 0)` }}
-                     />
-                     <span className="text-2xl font-black text-white">{analysisResult.selectionChance}%</span>
+                    <div
+                      className="absolute inset-0 rounded-full border-4 border-blue-500"
+                      style={{
+                        clipPath: `inset(${100 - analysisResult.selectionChance}% 0 0 0)`,
+                      }}
+                    />
+                    <span className="text-2xl font-black text-white">
+                      {analysisResult.selectionChance}%
+                    </span>
                   </div>
                   <div>
-                    <h4 className="font-bold text-white uppercase text-xs tracking-widest">Selection Chance</h4>
-                    <p className="text-[10px] text-slate-400 mt-1">Based on AI analysis</p>
+                    <h4 className="font-bold text-white uppercase text-xs tracking-widest">
+                      Selection Chance
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Based on AI analysis
+                    </p>
                   </div>
                 </div>
 
                 {/* 5. Skill Recommendation */}
                 <div className="md:col-span-2 card-glass p-8 space-y-6">
-                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Sparkles className="text-blue-400" size={20} /> Skill Recommendation
-                    </h3>
-                    <div className="space-y-4">
-                      {analysisResult.skillRecommendations.map((rec, i) => (
-                        <div key={i} className="p-4 bg-slate-900/50 rounded-xl border border-white/5 flex gap-3">
-                          <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
-                            <span className="text-[10px] font-black text-blue-400">{i + 1}</span>
-                          </div>
-                          <p className="text-sm text-slate-300 leading-relaxed">{rec}</p>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Sparkles className="text-blue-400" size={20} /> Skill
+                    Recommendation
+                  </h3>
+                  <div className="space-y-4">
+                    {analysisResult.skillRecommendations.map((rec, i) => (
+                      <div
+                        key={i}
+                        className="p-4 bg-slate-900/50 rounded-xl border border-white/5 flex gap-3"
+                      >
+                        <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
+                          <span className="text-[10px] font-black text-blue-400">
+                            {i + 1}
+                          </span>
                         </div>
-                      ))}
-                    </div>
+                        <p className="text-sm text-slate-300 leading-relaxed">
+                          {rec}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* 6. Certificate Recommendation */}
                 <div className="md:col-span-2 card-glass p-8 space-y-6">
-                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Award className="text-purple-400" size={20} /> Certificate Recommendation
-                    </h3>
-                    <div className="space-y-4">
-                      {analysisResult.certificateRecommendations.map((cert, i) => (
-                        <div key={i} className="p-4 bg-slate-900/50 rounded-xl border border-white/5 flex items-center justify-between group hover:border-purple-500/30 transition-all cursor-pointer">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Award className="text-purple-400" size={20} /> Certificate
+                    Recommendation
+                  </h3>
+                  <div className="space-y-4">
+                    {analysisResult.certificateRecommendations.map(
+                      (cert, i) => (
+                        <div
+                          key={i}
+                          className="p-4 bg-slate-900/50 rounded-xl border border-white/5 flex items-center justify-between group hover:border-purple-500/30 transition-all cursor-pointer"
+                        >
                           <div className="flex items-center gap-3">
                             <div className="p-2 bg-purple-500/10 rounded-lg text-purple-400">
                               <Award size={16} />
                             </div>
-                            <span className="text-sm font-medium text-slate-300">{cert}</span>
+                            <span className="text-sm font-medium text-slate-300">
+                              {cert}
+                            </span>
                           </div>
-                          <Send size={14} className="text-slate-600 group-hover:text-purple-400 transition-colors" />
+                          <Send
+                            size={14}
+                            className="text-slate-600 group-hover:text-purple-400 transition-colors"
+                          />
                         </div>
-                      ))}
-                    </div>
+                      ),
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
