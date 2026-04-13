@@ -57,7 +57,7 @@ class StorageInterface(ABC):
 
 class LocalStorageService(StorageInterface):
     def __init__(self, base_dir: str = None):
-        self.base_dir = base_dir or settings.UPLOAD_DIR
+        self.base_dir = base_dir or settings.upload_path
         os.makedirs(self.base_dir, exist_ok=True)
         logger.info(f"Local storage initialized at: {self.base_dir}")
     

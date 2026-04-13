@@ -20,8 +20,9 @@ from app.models import (
     ResumeContent, ResumeEmbedding, ResumeVersion, Skill,
 )
 from app.utils.encryption import decrypt, encrypt
-from app.services.resume_service.parser import parse_resume as parse_resume_file
+from app.services.resume_service.parser import EnsembleParser, extract_text_from_file
 from app.services.resume_service.ats_analyzer import calculate_ats_score as calculate_ats
+from app.services.resume_service.performance_optimizer import PerformanceOptimizer
 from app.services.resume_service.embedding_service import get_embedding_service
 from app.services.job_service.job_matcher import JobMatcher
 from app.core.config import settings
@@ -37,6 +38,8 @@ def _err(stage: str, error: str, **extra) -> Dict[str, Any]:
 class ResumePipelineService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self.ensemble_parser = EnsembleParser(use_llm=True)
+        self.optimizer = PerformanceOptimizer(db)
 
     async def process_resume_upload(self, resume_id: int, file_path: str, user_id: int) -> Dict[str, Any]:
         """Runs the full processing pipeline for an uploaded resume."""
@@ -107,14 +110,14 @@ class ResumePipelineService:
                 results["success"] = False
                 return results
 
-            # 3. ATS Analysis
-            ats_result = await self.run_ats_analysis(resume_id, user_id)
-            if ats_result.get("success"):
+            # 3. Enhanced ATS Analysis (ML + Semantic)
+            ats_result = await calculate_ats(resume, db=self.db)
+            if ats_result and "overall_score" in ats_result:
                 results["stages_completed"].append("ats_analysis")
-                results["ats_score"] = ats_result.get("ats_score")
+                results["ats_score"] = ats_result.get("overall_score")
             else:
-                logger.error(f"[Pipeline] ATS analysis failed for resume {resume_id}: {ats_result.get('error')}")
-                results["errors"].append(f"ATS analysis failed: {ats_result.get('error')}")
+                logger.error(f"[Pipeline] ATS analysis failed for resume {resume_id}")
+                results["errors"].append("ATS analysis failed to return scores")
 
             # 4. Job Matching
             match_result = await self.match_jobs(resume_id, user_id)
@@ -155,12 +158,23 @@ class ResumePipelineService:
             if full_path is None or not os.path.exists(full_path):
                 return _err("parsing", f"File not found: '{file_path}'")
 
-            # Note: Using sync parse_resume_file here for simplicity as it was imported so
-            parsed_data = parse_resume_file(full_path)
-            if not parsed_data:
-                return _err("parsing", "Parsed data is empty.")
+            # 1. Extract raw text from file
+            raw_text = extract_text_from_file(full_path)
+            if not raw_text:
+                return _err("parsing", "Could not extract text from file.")
 
-            self.db.commit()
+            # 2. Use EnsembleParser for high-accuracy extraction
+            # Wrap with performance optimizer for caching and rate limiting
+            async def _parse():
+                return self.ensemble_parser.parse_resume(raw_text)
+            
+            ensemble_result = await self.optimizer.execute_with_rate_limit(
+                _parse, resource_name="llm_parsing"
+            )
+            parsed_data = ensemble_result.to_structured_resume().dict()
+            
+            # Ensure raw_text is included in the parsed data
+            parsed_data["raw_text"] = raw_text
 
             # Update resume fields
             resume.parsed_data = json.dumps(parsed_data)
@@ -292,7 +306,7 @@ class ResumePipelineService:
                     analysis_type="ats",
                     score=ats_result.get("overall_score"),
                     feedback=json.dumps(ats_result.get("category_scores", {})),
-                    issues=json.dumps(ats_result.get("issues", [])),
+                    missing_keywords=json.dumps(ats_result.get("issues", [])),
                     suggestions=json.dumps(ats_result.get("recommendations", [])),
                     created_at=datetime.utcnow()
                 )
@@ -378,22 +392,22 @@ class ResumePipelineService:
         if os.path.isabs(file_path):
             return file_path if os.path.exists(file_path) else None
         
-        # 1. Try relative to settings.UPLOAD_DIR (standard for LocalStorageService)
-        path1 = os.path.join(settings.UPLOAD_DIR, file_path)
+        # 1. Try relative to settings.upload_path (the standardized absolute path)
+        path1 = os.path.join(settings.upload_path, file_path)
         if os.path.exists(path1):
-            return os.path.abspath(path1)
+            return path1
             
-        # 2. Try Backend/uploads if Backend is a subdirectory
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        path2 = os.path.join(project_root, "uploads", file_path)
+        # 2. Try direct relative to settings.UPLOAD_DIR (from CWD)
+        path2 = os.path.join(settings.UPLOAD_DIR, file_path)
         if os.path.exists(path2):
             return os.path.abspath(path2)
             
-        # 3. Try relative to current working directory
-        if os.path.exists(file_path):
-            return os.path.abspath(file_path)
+        # 3. Try relative to project root
+        path3 = os.path.join(settings.BASE_DIR, "uploads", file_path)
+        if os.path.exists(path3):
+            return path3
             
-        logger.error(f"Could not resolve file path: {file_path}. Tried: {path1}, {path2}")
+        logger.error(f"Could not resolve file path: {file_path}. Tried: {path1}, {path2}, {path3}")
         return None
 
     def _update_nested_data(self, resume: Resume, data: Dict[str, Any]):

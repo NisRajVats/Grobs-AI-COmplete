@@ -50,33 +50,31 @@ def mock_resume():
 
 @pytest.mark.anyio
 async def test_calculate_ats_score_success(mock_resume):
-    # Mock LLM response
-    mock_llm_result = {
+    # Mock analysis result
+    mock_result = {
         "overall_score": 85,
-        "keyword_optimization_score": 80,
-        "semantic_relevance_score": 90,
-        "industry_alignment_score": 85,
-        "formatting_score": 95,
-        "structure_score": 90,
-        "readability_score": 88,
-        "contact_info_score": 100,
-        "issues": ["Add more metrics"],
-        "recommendations": ["Quantify achievements"],
+        "confidence": 0.9,
+        "analysis_time_ms": 100,
+        "job_description": "Looking for a Python dev with Kubernetes",
+        "analysis_timestamp": "2026-04-13T12:00:00Z",
+        "components": {
+            "keyword_match": 80,
+            "experience": 90,
+            "skills_coverage": 85
+        },
         "skill_analysis": {
+            "matched_skills": ["Python", "FastAPI", "Kubernetes"],
+            "missing_skills": ["Docker"],
             "hard_skills": ["Python", "FastAPI"],
             "soft_skills": ["Leadership"],
             "tools": ["Docker"]
         },
-        "keyword_gap": {
-            "matched": ["Python"],
-            "missing": ["Kubernetes"],
-            "optional": ["AWS"]
-        },
-        "industry_tips": ["Focus on cloud skills"]
+        "recommendations": ["Quantify achievements"],
+        "parsing_result": {"method": "ensemble", "confidence": 0.95, "data": {}}
     }
     
-    with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output_async", new_callable=AsyncMock) as mock_gen:
-        mock_gen.return_value = mock_llm_result
+    with patch("app.services.resume_service.ats_analyzer.EnhancedATSAnalyzer.analyze_resume", new_callable=AsyncMock) as mock_analyze:
+        mock_analyze.return_value = mock_result
         result = await calculate_ats_score(mock_resume, "Looking for a Python dev with Kubernetes")
         
         assert 70 <= result["overall_score"] <= 95
@@ -90,10 +88,22 @@ async def test_calculate_ats_score_success(mock_resume):
 
 @pytest.mark.anyio
 async def test_calculate_ats_score_failure(mock_resume):
-    # Mock LLM failure
-    with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output_async", new_callable=AsyncMock) as mock_gen:
-        mock_gen.return_value = None
-        result = await calculate_ats_score(mock_resume, "Some job")
+    # Mock analysis failure (heuristic fallback)
+    mock_result = {
+        "overall_score": 30,
+        "confidence": 0.6,
+        "analysis_time_ms": 50,
+        "job_description": "Some job",
+        "analysis_timestamp": "2026-04-13T12:00:00Z",
+        "components": {"keyword_match": 30},
+        "skill_analysis": {"matched_skills": [], "missing_skills": []},
+        "recommendations": [],
+        "parsing_result": {"method": "heuristic", "confidence": 0.6, "data": {}}
+    }
+    
+    with patch("app.services.resume_service.ats_analyzer.EnhancedATSAnalyzer.analyze_resume", new_callable=AsyncMock) as mock_analyze:
+        mock_analyze.return_value = mock_result
+        result = await calculate_ats_score(mock_resume, "Some job", provider="heuristic")
         
         # Should now return heuristic score instead of 0
         assert result["overall_score"] > 0

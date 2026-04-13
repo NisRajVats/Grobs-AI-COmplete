@@ -14,7 +14,7 @@ from app.models import Resume, ResumeVersion, Education, Experience, Project, Sk
 from app.models.user import User
 from app.utils.encryption import encrypt, decrypt
 from app.services.resume_service.parser import parse_resume_async
-from app.services.resume_service.ats_analyzer import calculate_ats_score
+from app.services.resume_service.ats_analyzer import calculate_ats_score as calculate_ats_score
 from app.integrations.cloud_storage import cloud_storage_service as storage_service
 
 logger = logging.getLogger(__name__)
@@ -260,6 +260,42 @@ class ResumeManager:
     
     # ==================== Resume Actions ====================
     
+    async def update_resume_analysis(
+        self,
+        resume_id: int,
+        ml_score: int,
+        parsing_result: Dict[str, Any],
+        skill_analysis: Dict[str, Any],
+        recommendations: List[str],
+        confidence: float,
+    ) -> bool:
+        """Update resume analysis in the database."""
+        resume = self.db.query(Resume).filter(Resume.id == resume_id).first()
+        if not resume:
+            return False
+        
+        # Update resume scores
+        resume.ats_score = ml_score
+        resume.analysis_score = ml_score
+        
+        # Save as ResumeAnalysis record
+        analysis = ResumeAnalysis(
+            resume_id=resume_id,
+            analysis_type="enhanced_ats",
+            score=ml_score,
+            feedback=json.dumps({
+                "parsing_result": parsing_result,
+                "skill_analysis": skill_analysis,
+                "confidence": confidence,
+            }),
+            missing_keywords=json.dumps(skill_analysis.get("missing_skills", [])),
+            suggestions=json.dumps(recommendations),
+            created_at=datetime.utcnow()
+        )
+        self.db.add(analysis)
+        self.db.commit()
+        return True
+
     async def parse_resume_file(self, resume_id: int, user_id: int) -> Optional[Dict]:
         """Parse a resume PDF file and extract data."""
         resume = self.get_resume(resume_id, user_id)
@@ -270,24 +306,19 @@ class ResumeManager:
         # Robust path resolution for local storage
         full_path = resume.file_path
         if settings.STORAGE_PROVIDER == "local" and not os.path.isabs(full_path):
-            # Try matching how LocalStorageService saves files: relative to settings.UPLOAD_DIR
-            upload_dir = settings.UPLOAD_DIR
+            # Candidate 1: Standardized absolute path from config
+            path1 = os.path.join(settings.upload_path, full_path)
             
-            # Candidate 1: Direct join with settings.UPLOAD_DIR (relative to CWD)
-            path1 = os.path.join(upload_dir, full_path)
+            # Candidate 2: Direct join with settings.UPLOAD_DIR (relative to CWD)
+            path2 = os.path.join(settings.UPLOAD_DIR, full_path)
             
-            # Candidate 2: Absolute path via project root (Backend directory)
-            # dirname(__file__) is Backend/app/services/resume_service/
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-            path2 = os.path.join(base_dir, upload_dir.lstrip("./"), full_path)
-            
-            # Candidate 3: Root project directory (if Backend is a subdirectory)
-            path3 = os.path.join(base_dir, "..", "uploads", full_path)
+            # Candidate 3: Project root uploads
+            path3 = os.path.join(settings.BASE_DIR, "uploads", full_path)
             
             if os.path.exists(path1):
                 full_path = path1
             elif os.path.exists(path2):
-                full_path = path2
+                full_path = os.path.abspath(path2)
             elif os.path.exists(path3):
                 full_path = path3
         
@@ -333,40 +364,13 @@ class ResumeManager:
         user_id: int,
         job_description: str = ""
     ) -> Optional[Dict]:
-        """Calculate ATS score for a resume."""
+        """Calculate enhanced ATS score for a resume."""
         resume = self.get_resume(resume_id, user_id)
         if not resume:
             return None
         
-        # ATS analysis focused on professional standards and target role
-        ats_result = await calculate_ats_score(resume, job_description=job_description)
-        
-        # Prepare feedback dictionary including new metrics
-        feedback_dict = {
-            "category_scores": ats_result.get("category_scores", {}),
-            "skill_analysis": ats_result.get("skill_analysis", {}),
-            "keyword_gap": ats_result.get("keyword_gap", {}),
-            "industry_tips": ats_result.get("industry_tips", []),
-            "llm_powered": ats_result.get("llm_powered", False)
-        }
-        
-        # Save analysis
-        analysis = ResumeAnalysis(
-            resume_id=resume.id,
-            analysis_type="ats",
-            score=ats_result["overall_score"],
-            feedback=json.dumps(feedback_dict),
-            missing_keywords=json.dumps(ats_result.get("issues", [])),
-            suggestions=json.dumps(ats_result.get("recommendations", [])),
-            job_description=job_description if job_description else None,
-            created_at=datetime.now()
-        )
-        self.db.add(analysis)
-        
-        # Update resume with score
-        resume.ats_score = ats_result["overall_score"]
-        resume.analysis_score = ats_result["overall_score"]
-        self.db.commit()
+        # Use Enhanced ATS analyzer (ML + Semantic)
+        ats_result = await calculate_ats_score(resume, job_description=job_description, db=self.db)
         
         return ats_result
     

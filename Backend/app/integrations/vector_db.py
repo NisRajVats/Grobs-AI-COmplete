@@ -149,7 +149,7 @@ class ChromaService(VectorDBInterface):
     def __init__(self):
         try:
             import chromadb
-            self.client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+            self.client = chromadb.PersistentClient(path=settings.chroma_persist_path)
             logger.info("Chroma client initialized")
         except ImportError:
             logger.warning("Chroma not installed")

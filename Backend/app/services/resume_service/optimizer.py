@@ -54,8 +54,8 @@ from sqlalchemy.orm import Session
 from app.models import Job, Resume, ResumeAnalysis, ResumeVersion, Skill
 from app.services.llm_service import llm_service
 from app.services.resume_service.resume_manager import ResumeManager
-from app.services.resume_service.ats_analyzer import (
-    calculate_ats_score,
+from app.services.resume_service.ats_analyzer import calculate_ats_score
+from app.services.resume_service.heuristic_ats_analyzer import (
     _parse_jd_requirements,
     _match_skills,
     ROLE_KEYWORDS,
@@ -63,7 +63,7 @@ from app.services.resume_service.ats_analyzer import (
     _detect_role_category_from_text,
 )
 from app.utils.encryption import decrypt, encrypt
-from .parser import clean_experience_entry, clean_text
+from .heuristic_parser import clean_experience_entry, clean_text
 
 logger = logging.getLogger(__name__)
 

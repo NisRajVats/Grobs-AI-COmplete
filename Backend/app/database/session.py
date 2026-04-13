@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 # Database URL configuration using pydantic-settings
-SQLALCHEMY_DATABASE_URL = settings.SQLALCHEMY_DATABASE_URL
+SQLALCHEMY_DATABASE_URL = settings.database_url
 
 # Create engine with appropriate settings
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):

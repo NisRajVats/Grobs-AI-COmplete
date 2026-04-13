@@ -384,7 +384,7 @@ class TestEnhancedATSAnalyzer(unittest.TestCase):
         """Set up test fixtures."""
         self.analyzer = EnhancedATSAnalyzer()
     
-    @patch('app.services.resume_service.enhanced_ats_analyzer._prepare_resume_text')
+    @patch('app.services.resume_service.ats_analyzer._prepare_resume_text')
     def test_analyze_resume(self, mock_prepare_text):
         """Test resume analysis."""
         # Mock resume

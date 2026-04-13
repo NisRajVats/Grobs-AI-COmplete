@@ -11,22 +11,26 @@ New components:
 - enhanced_ats_analyzer: Integrated enhanced analysis
 """
 
-from .ats_analyzer import calculate_ats_score
-from .parser import parse_resume, extract_text_from_file
+from .ats_analyzer import calculate_enhanced_ats_score as calculate_ats_score
+from .parser import parse_resume_ensemble as parse_resume, extract_text_from_file
 from .resume_manager import ResumeManager
+
+# Heuristic Fallbacks
+from .heuristic_ats_analyzer import calculate_ats_score as calculate_ats_heuristic
+from .heuristic_parser import parse_resume as parse_resume_heuristic
 
 # New v4 components
 from .embedding_service import get_embedding_service, EmbeddingService
 from .ml_scorer import get_ml_scorer, MLATSscorer
 from .feedback_service import get_feedback_service, FeedbackService
-from .ensemble_parser import (
+from .parser import (
     get_ensemble_parser,
     parse_resume_ensemble,
     EnsembleParser,
     StructuredResume,
     ParsedResumeWithConfidence,
 )
-from .enhanced_ats_analyzer import (
+from .ats_analyzer import (
     EnhancedATSAnalyzer,
     calculate_enhanced_ats_score,
 )

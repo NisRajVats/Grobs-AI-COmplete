@@ -397,30 +397,39 @@ class TestATSScoreCalculation:
     @pytest.mark.anyio
     async def test_calculate_ats_score_with_mock_llm(self, sample_resume):
         mock_llm_result = {
-            "overall_score": 85,
-            "keyword_optimization_score": 80,
-            "semantic_relevance_score": 90,
-            "industry_alignment_score": 85,
-            "formatting_score": 95,
-            "structure_score": 90,
-            "readability_score": 88,
-            "contact_info_score": 100,
-            "issues": ["Add more metrics"],
-            "recommendations": ["Quantify achievements"],
-            "skill_analysis": {
-                "hard_skills": ["Python", "Django"],
-                "soft_skills": ["Communication"],
-                "tools": ["Git"]
-            },
-            "keyword_gap": {
-                "matched": ["Python", "Django"],
-                "missing": ["FastAPI"],
-                "optional": ["AWS"]
-            },
-            "industry_tips": ["Focus on backend skills"]
+            "full_name": "John Doe",
+            "email": "john.doe@example.com",
+            "phone": "+1234567890",
+            "location": "San Francisco, CA",
+            "title": "Senior Software Engineer",
+            "summary": "Experienced developer with a focus on Python and cloud technologies.",
+            "education": [
+                {
+                    "school": "University of Technology",
+                    "degree": "Bachelor of Science",
+                    "major": "Computer Science",
+                    "start_date": "2010",
+                    "end_date": "2014"
+                }
+            ],
+            "experience": [
+                {
+                    "company": "Tech Corp",
+                    "role": "Software Engineer",
+                    "start_date": "2015",
+                    "end_date": "Present",
+                    "description": "Developing scalable web applications.",
+                    "points": ["Built microservices", "Optimized database queries"]
+                }
+            ],
+            "skills": [
+                {"name": "Python", "category": "Programming"},
+                {"name": "Django", "category": "Frameworks"},
+                {"name": "AWS", "category": "Cloud"}
+            ]
         }
         
-        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output_async", new_callable=AsyncMock) as mock_gen:
+        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output", new_callable=MagicMock) as mock_gen:
             mock_gen.return_value = mock_llm_result
             jd = "Looking for a Python developer with Django experience"
             result = await calculate_ats_score(sample_resume, jd)
@@ -433,7 +442,7 @@ class TestATSScoreCalculation:
     
     @pytest.mark.anyio
     async def test_calculate_ats_score_llm_failure_fallback(self, sample_resume):
-        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output_async", new_callable=AsyncMock) as mock_gen:
+        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output", new_callable=MagicMock) as mock_gen:
             mock_gen.return_value = None
             jd = "Some job description"
             result = await calculate_ats_score(sample_resume, jd)
@@ -445,7 +454,7 @@ class TestATSScoreCalculation:
     
     @pytest.mark.anyio
     async def test_calculate_ats_score_empty_jd(self, sample_resume):
-        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output_async", new_callable=AsyncMock) as mock_gen:
+        with patch("app.services.resume_service.ats_analyzer.llm_service.generate_structured_output", new_callable=MagicMock) as mock_gen:
             mock_gen.return_value = None
             result = await calculate_ats_score(sample_resume, "")
             assert result is not None

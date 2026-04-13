@@ -8,6 +8,9 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    # Base Directory
+    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     # Application
     APP_NAME: str = "GrobsAI Backend"
     APP_VERSION: str = "1.0.0"
@@ -24,6 +27,14 @@ class Settings(BaseSettings):
 
     # Database
     SQLALCHEMY_DATABASE_URL: str = "sqlite:///./grobs.db"
+    
+    @property
+    def database_url(self) -> str:
+        if self.SQLALCHEMY_DATABASE_URL.startswith("sqlite:///./"):
+            db_path = os.path.join(self.BASE_DIR, self.SQLALCHEMY_DATABASE_URL.replace("sqlite:///./", ""))
+            return f"sqlite:///{db_path}"
+        return self.SQLALCHEMY_DATABASE_URL
+
     DATABASE_POOL_SIZE: int = 5
     DATABASE_MAX_OVERFLOW: int = 10
 
@@ -39,9 +50,23 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_CALLS: int = 100
+    RATE_LIMIT_WINDOW: int = 60  # 1 minute
+
+    # Cache Settings
+    CACHE_MAX_SIZE: int = 100
+    CACHE_TTL: int = 3600  # 1 hour
+    REDIS_URL: Optional[str] = None
 
     # File Storage
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = "uploads"
+    
+    @property
+    def upload_path(self) -> str:
+        path = os.path.join(self.BASE_DIR, self.UPLOAD_DIR)
+        os.makedirs(path, exist_ok=True)
+        return path
+
     MAX_FILE_SIZE_MB: int = 10
     ALLOWED_FILE_TYPES: List[str] = ["application/pdf"]
     SKIP_LLM_PARSING: bool = False
@@ -49,7 +74,7 @@ class Settings(BaseSettings):
     # Cloud Storage
     STORAGE_PROVIDER: str = "local"
     AWS_S3_BUCKET: Optional[str] = None
-    AWS_REGION: Optional[str] = None
+    AWS_S3_REGION: Optional[str] = None
     GCS_BUCKET: Optional[str] = None
 
     # LLM Providers
@@ -80,7 +105,13 @@ class Settings(BaseSettings):
     PINECONE_ENVIRONMENT: Optional[str] = None
     WEAVIATE_URL: Optional[str] = None
     WEAVIATE_API_KEY: Optional[str] = None
-    CHROMA_PERSIST_DIR: str = "./chroma_db"
+    CHROMA_PERSIST_DIR: str = "chroma_db"
+    
+    @property
+    def chroma_persist_path(self) -> str:
+        path = os.path.join(self.BASE_DIR, self.CHROMA_PERSIST_DIR)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -107,8 +138,14 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "./backend.log"
+    LOG_FILE: str = "backend.log"
+    
+    @property
+    def log_file_path(self) -> str:
+        return os.path.join(self.BASE_DIR, self.LOG_FILE)
+
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
 
     # Monitoring
     SENTRY_DSN: Optional[str] = None

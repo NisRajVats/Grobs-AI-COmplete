@@ -57,7 +57,7 @@ def setup_logging(
     """
     # Use settings if not provided
     level = log_level or settings.LOG_LEVEL
-    file_path = log_file or settings.LOG_FILE
+    file_path = log_file or settings.log_file_path
     fmt = log_format or settings.LOG_FORMAT
     
     # Convert string level to logging constant

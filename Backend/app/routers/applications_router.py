@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.database.session import get_db
-from app.models import User, JobApplication, Notification
+from app.models import User, JobApplication, Notification, Resume
+from app.services.resume_service.feedback_service import get_feedback_service
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationUpdate,
@@ -58,6 +59,22 @@ async def create_application(
     db.commit()
     db.refresh(new_application)
     
+    # Record feedback for the application
+    try:
+        feedback_service = get_feedback_service(db=db)
+        resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
+        ats_score = resume.ats_score if resume else 50
+        
+        feedback_service.record_application(
+            resume_id=application.resume_id,
+            user_id=current_user.id,
+            ats_score=ats_score or 50,
+            job_description=application.job_title, # Fallback to title
+        )
+    except Exception as e:
+        # Don't fail the request if feedback recording fails
+        print(f"Failed to record application feedback: {e}")
+
     # Create notification
     notif = Notification(
         user_id=current_user.id,
@@ -108,7 +125,25 @@ async def update_application(
     
     # Update fields
     if update_data.status is not None:
+        old_status = application.status
         application.status = update_data.status
+        
+        # Record outcome feedback if status changed to interview, offer, or rejected
+        if update_data.status != old_status and update_data.status in ("interview", "offer", "rejected"):
+            try:
+                feedback_service = get_feedback_service(db=db)
+                resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
+                ats_score = resume.ats_score if resume else 50
+                
+                feedback_service.record_outcome(
+                    resume_id=application.resume_id,
+                    user_id=current_user.id,
+                    ats_score=ats_score or 50,
+                    outcome=update_data.status
+                )
+            except Exception as e:
+                print(f"Failed to record outcome feedback: {e}")
+
     if update_data.notes is not None:
         application.notes = update_data.notes
     if update_data.next_step is not None:
